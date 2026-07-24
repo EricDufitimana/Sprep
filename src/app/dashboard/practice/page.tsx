@@ -141,7 +141,7 @@ function PracticeInner() {
 
   return (
     <>
-      <PageHeader title="Practice" description="Sit a single bank, or build a full module from several.">
+      <PageHeader title="Practice" description="Build a timed, full-length test from a bank — or compose a module from several.">
         <Button variant="ghost" onClick={() => setBuilderOpen(true)} disabled={list.length === 0}>
           <Icon name="grid-alt" className="text-small" />
           Build module
@@ -151,6 +151,15 @@ function PracticeInner() {
           Create test
         </Button>
       </PageHeader>
+
+      <p className="-mt-3 mb-6 text-small text-ink-500">
+        Tests here run under a countdown, Bluebook-style — no feedback until you submit. To drill
+        specific skills untimed, with the answer on demand after each question, use the{' '}
+        <Link href="/dashboard/question-bank" className="font-medium text-blue hover:underline">
+          Question Bank
+        </Link>
+        .
+      </p>
 
       {/* Modules — composed sections. Shown above banks when any exist. */}
       {moduleList.length > 0 && (
@@ -434,13 +443,22 @@ function PracticeInner() {
                     />
                     <span>
                       <span className="block text-small font-medium text-ink-900">
-                        Skip questions I’ve already done
+                        Exclude questions I’ve already done
                       </span>
                       <span className="block text-micro text-ink-500 tabular-nums">
                         {configBank.counts.verified - configBank.attempted} of {configBank.counts.verified} still untouched
                       </span>
                     </span>
                   </label>
+                )}
+
+                {/* When exclusion leaves fewer than asked for, say so plainly
+                    rather than quietly serving a shorter test. */}
+                {excludeSeen && pool < 8 && (
+                  <p className="rounded-control bg-amber-tint px-3 py-2 text-micro text-ink-700">
+                    Only {pool} new question{pool === 1 ? '' : 's'} left in this bank. Reduce the
+                    count, or turn exclusion off to reuse ones you’ve done.
+                  </p>
                 )}
               </>
             )

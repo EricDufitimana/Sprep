@@ -3,7 +3,9 @@ import { TRPCError } from '@trpc/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createTRPCRouter, protectedProcedure } from '../init';
 import { scoreAttempt, type ScorableAnswer, type ScorableQuestion } from '@/utils/scoring';
+import { fetchAllRows } from '@/utils/paginate';
 import { planFor, selectQuestionIds } from './modules-management';
+import { COMPLETED_ANSWER_FILTER } from './questions';
 
 /**
  * Test lifecycle: start → (answers.save autosaves) → submit → getResults.
@@ -68,6 +70,26 @@ interface Selection {
   moduleId: string | null;
 }
 
+/**
+ * Every question the caller has already completed, in any mode. The unified
+ * `answers` table is the single source of truth for "already done" — it spans
+ * timed tests, modules, and the untimed question bank alike. RLS scopes the
+ * read to the current user, so no explicit user filter is needed.
+ */
+async function completedQuestionIds(supabase: SupabaseClient): Promise<Set<string>> {
+  // Paged so a user with more than PostgREST's 1000-row cap of answer rows
+  // still gets a complete "already done" set to exclude against.
+  const rows = await fetchAllRows<{ id: string; question_id: string }>((from, to) =>
+    supabase
+      .from('answers')
+      .select('id, question_id')
+      .or(COMPLETED_ANSWER_FILTER)
+      .order('id', { ascending: true })
+      .range(from, to),
+  );
+  return new Set(rows.map((r) => r.question_id));
+}
+
 /** Pick questions for a single-bank sitting (the original flow, now id-only). */
 async function selectForBank(
   supabase: SupabaseClient,
@@ -97,13 +119,7 @@ async function selectForBank(
     .order('position', { ascending: true, nullsFirst: false });
 
   if (excludeSeen) {
-    const { data: seenRows } = await supabase
-      .from('answers')
-      .select('question_id, selected_answer, questions!inner ( bank_id ), test_attempts!inner ( status )')
-      .eq('questions.bank_id', bankId)
-      .not('selected_answer', 'is', null)
-      .eq('test_attempts.status', 'submitted');
-    const seen = new Set((seenRows ?? []).map((r) => r.question_id));
+    const seen = await completedQuestionIds(supabase);
     if (seen.size > 0) query = query.not('id', 'in', `(${Array.from(seen).join(',')})`);
   }
 
@@ -145,22 +161,20 @@ async function selectForModule(
 
   const bankIds = mod.source_bank_ids as string[];
 
-  // Fresh pool: verified questions in the source banks, minus those already
-  // answered in a submitted sitting.
-  const { data: all } = await supabase
-    .from('questions')
-    .select('id, domain')
-    .in('bank_id', bankIds)
-    .eq('extraction_status', 'verified');
+  // Fresh pool: verified questions in the source banks, minus everything the
+  // user has already completed in any mode (unified answers table). Paged so
+  // a large default bank (>1000 rows) isn't silently truncated.
+  const all = await fetchAllRows<{ id: string; domain: string | null }>((from, to) =>
+    supabase
+      .from('questions')
+      .select('id, domain')
+      .in('bank_id', bankIds)
+      .eq('extraction_status', 'verified')
+      .order('id', { ascending: true })
+      .range(from, to),
+  );
 
-  const { data: seenRows } = await supabase
-    .from('answers')
-    .select('question_id, selected_answer, questions!inner ( bank_id ), test_attempts!inner ( status )')
-    .in('questions.bank_id', bankIds)
-    .not('selected_answer', 'is', null)
-    .eq('test_attempts.status', 'submitted');
-
-  const seen = new Set((seenRows ?? []).map((r) => r.question_id));
+  const seen = await completedQuestionIds(supabase);
   const pool = (all ?? []).filter((q) => !seen.has(q.id)) as { id: string; domain: string | null }[];
 
   const available: Record<string, number> = {};
@@ -346,7 +360,7 @@ export const testsRouter = createTRPCRouter({
 
       const { data: attempt, error: attemptError } = await supabase
         .from('test_attempts')
-        .select('id, user_id, bank_id, status, total_questions, correct_count, score_percent, time_used_seconds, submitted_at')
+        .select('id, user_id, bank_id, module_id, status, total_questions, correct_count, score_percent, time_used_seconds, submitted_at')
         .eq('id', input.attemptId)
         .single();
 
@@ -412,12 +426,17 @@ export const testsRouter = createTRPCRouter({
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not save your score' });
       }
 
-      // Upsert grades. Unanswered questions get a row so the review list is
-      // complete and `is_correct` is explicit rather than absent.
+      // Upsert grades into the unified answers table. Unanswered questions get
+      // a row so the review list is complete and `is_correct` is explicit rather
+      // than absent. `source` records how the sitting was run, so bank practice
+      // (source 'bank') and sittings share one table without ambiguity. This is
+      // now the only completion record — there is no separate history table.
+      const source = attempt.module_id ? 'module' : 'test';
       const gradeRows = scored.graded.map((g) => ({
         attempt_id: input.attemptId,
         question_id: g.question_id,
         user_id: user.id,
+        source,
         selected_answer: g.selected_answer,
         is_correct: g.is_correct,
         flagged: g.flagged,

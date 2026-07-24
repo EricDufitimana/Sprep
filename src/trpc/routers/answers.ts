@@ -52,6 +52,8 @@ export const answersRouter = createTRPCRouter({
         questionId: z.string().uuid(),
         selectedAnswer: answerLetterSchema.nullable().optional(),
         flagged: z.boolean().optional(),
+        /** Cumulative ms the user has spent on this question so far. */
+        timeSpentMs: z.number().int().min(0).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -68,6 +70,7 @@ export const answersRouter = createTRPCRouter({
       };
       if (input.selectedAnswer !== undefined) row.selected_answer = input.selectedAnswer;
       if (input.flagged !== undefined) row.flagged = input.flagged;
+      if (input.timeSpentMs !== undefined) row.time_spent_ms = input.timeSpentMs;
 
       const { error } = await supabase
         .from('answers')

@@ -506,18 +506,23 @@ model webauthn_credentials {
 }
 
 model answers {
-  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  attempt_id      String        @db.Uuid
-  question_id     String        @db.Uuid
-  user_id         String        @default(dbgenerated("auth.uid()")) @db.Uuid
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  // Null attempt_id = untimed question-bank practice (no sitting). Non-null =
+  // a timed test or module sitting.
+  attempt_id      String?        @db.Uuid
+  question_id     String         @db.Uuid
+  user_id         String         @default(dbgenerated("auth.uid()")) @db.Uuid
+  // How the attempt was made: 'test' | 'module' | 'bank'.
+  source          String?
   selected_answer String?
   is_correct      Boolean?
-  flagged         Boolean       @default(false)
+  flagged         Boolean        @default(false)
   self_diagnosis  String?
-  answered_at     DateTime?     @db.Timestamptz(6)
-  test_attempts   test_attempts @relation(fields: [attempt_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  questions       questions     @relation(fields: [question_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users           users         @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  answered_at     DateTime?      @db.Timestamptz(6)
+  time_spent_ms   Int?
+  test_attempts   test_attempts? @relation(fields: [attempt_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  questions       questions      @relation(fields: [question_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users           users          @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([attempt_id, question_id])
   @@index([attempt_id], map: "idx_answers_attempt")
@@ -714,6 +719,7 @@ model modules {
   @@index([user_id, created_at(sort: Desc)], map: "idx_modules_user")
   @@schema("public")
 }
+
 
 enum aal_level {
   aal1

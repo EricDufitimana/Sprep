@@ -4,6 +4,8 @@ import { createTRPCRouter, protectedProcedure } from '../init';
 import { extractedQuestionSchema, questionBankSchema } from '@/lib/validation';
 import { parseAnswerPdf } from '@/utils/question-bank-parser';
 import { describeQuestions } from '@/utils/bank-description';
+import { fetchAllRows } from '@/utils/paginate';
+import { COMPLETED_ANSWER_FILTER } from './questions';
 
 /**
  * Bank lifecycle plus the entry point into AI extraction.
@@ -35,32 +37,42 @@ export const questionBanksManagementRouter = createTRPCRouter({
     const counts = new Map<string, { verified: number; needs_review: number; skipped: number }>();
 
     if (bankIds.length > 0) {
-      const { data: rows } = await ctx.supabase
-        .from('questions')
-        .select('bank_id, extraction_status')
-        .in('bank_id', bankIds);
+      // Paged: a large bank alone can exceed PostgREST's 1000-row cap, which
+      // would otherwise undercount its verified total on the card.
+      const rows = await fetchAllRows<{ id: string; bank_id: string; extraction_status: string }>(
+        (from, to) =>
+          ctx.supabase
+            .from('questions')
+            .select('id, bank_id, extraction_status')
+            .in('bank_id', bankIds)
+            .order('id', { ascending: true })
+            .range(from, to),
+      );
 
-      for (const row of rows ?? []) {
+      for (const row of rows) {
         const c = counts.get(row.bank_id) ?? { verified: 0, needs_review: 0, skipped: 0 };
         c[row.extraction_status as keyof typeof c] += 1;
         counts.set(row.bank_id, c);
       }
     }
 
-    // How many questions in each bank this user has already answered. This is
-    // what the card's progress bar reflects — coverage of the bank, not how
-    // much of it parsed cleanly.
+    // How many questions in each bank this user has already completed — in any
+    // mode. Drawn from the unified `answers` table so the card's progress bar
+    // and the "skip already done" toggle agree with what a test would exclude.
     const attempted = new Map<string, number>();
     if (bankIds.length > 0) {
-      const { data: rows } = await ctx.supabase
-        .from('answers')
-        .select('question_id, selected_answer, questions!inner ( bank_id ), test_attempts!inner ( status )')
-        .not('selected_answer', 'is', null)
-        // An abandoned sitting isn't progress — only submitted work counts.
-        .eq('test_attempts.status', 'submitted');
+      const rows = await fetchAllRows<{ id: string; question_id: string; questions: unknown }>(
+        (from, to) =>
+          ctx.supabase
+            .from('answers')
+            .select('id, question_id, questions!inner ( bank_id )')
+            .or(COMPLETED_ANSWER_FILTER)
+            .order('id', { ascending: true })
+            .range(from, to),
+      );
 
       const seen = new Map<string, Set<string>>();
-      for (const row of rows ?? []) {
+      for (const row of rows) {
         const bankId = (row.questions as unknown as { bank_id: string } | null)?.bank_id;
         if (!bankId) continue;
         const set = seen.get(bankId) ?? new Set<string>();
@@ -97,11 +109,33 @@ export const questionBanksManagementRouter = createTRPCRouter({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Question bank not found' });
       }
 
-      const { data: questions } = await supabase
-        .from('questions')
-        .select('id, external_id, position, question_text, passage, options, correct_answer, explanation, visual_url, visual_data, skill, domain, difficulty, extraction_status')
-        .eq('bank_id', input.bankId)
-        .order('position', { ascending: true, nullsFirst: false });
+      // Paged: a large bank exceeds PostgREST's 1000-row cap; without this the
+      // detail page would silently drop everything past the first 1000.
+      type StatsQuestionRow = {
+        id: string;
+        external_id: string | null;
+        position: number | null;
+        question_text: string;
+        passage: string | null;
+        options: unknown;
+        correct_answer: string;
+        explanation: string | null;
+        visual_url: string | null;
+        visual_data: string | null;
+        skill: string | null;
+        domain: string | null;
+        difficulty: string | null;
+        extraction_status: string;
+      };
+      const questions = await fetchAllRows<StatsQuestionRow>((from, to) =>
+        supabase
+          .from('questions')
+          .select('id, external_id, position, question_text, passage, options, correct_answer, explanation, visual_url, visual_data, skill, domain, difficulty, extraction_status')
+          .eq('bank_id', input.bankId)
+          .order('position', { ascending: true, nullsFirst: false })
+          .order('id', { ascending: true })
+          .range(from, to),
+      );
 
       const { data: attempts } = await supabase
         .from('test_attempts')

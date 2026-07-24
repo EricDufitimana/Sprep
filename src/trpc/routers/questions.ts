@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { createTRPCRouter, protectedProcedure } from '../init';
+import { fetchAllRows } from '@/utils/paginate';
 import {
   answerLetterSchema,
   extractionStatusSchema,
@@ -10,13 +12,59 @@ import {
 } from '@/lib/validation';
 
 /**
- * Reading and repairing individual questions.
+ * Reading and repairing individual questions, plus the untimed browse flow.
  *
- * This is the only path by which a `needs_review` question becomes `verified`
- * and therefore eligible to appear in a test. Procedures here legitimately
- * return `correct_answer` — the caller owns the bank and is reviewing it
- * outside any sitting. Nothing in the test lifecycle reads from this router.
+ * Two kinds of procedure live here, with opposite answer-visibility rules:
+ *
+ *  - Bank review (`listByBank`, `get`, `updateReviewedQuestion`) legitimately
+ *    returns `correct_answer` — the caller owns the bank and is editing it
+ *    outside any sitting.
+ *  - The browse flow (`domainCounts`, `buildCustomSet`, `check`) serves
+ *    questions to *take*, so it honours the same invariant as the timed test:
+ *    `buildCustomSet` selects only SAFE columns (no answer/explanation), and
+ *    `check` is the single place that hands them back — one question at a
+ *    time, on explicit user action, recording the attempt (with correctness
+ *    and per-question time) in the unified `answers` table.
  */
+
+/** Columns safe to send before a reveal — mirrors the timed-test invariant. */
+const SAFE_QUESTION_COLUMNS =
+  'id, external_id, position, passage, question_text, options, has_visual, visual_data, visual_url, domain, skill, difficulty';
+
+/**
+ * PostgREST predicate for "this row is a real completion", shared by every
+ * "already done" read. A bank/practice attempt (attempt_id null) always counts;
+ * a sitting counts only once graded (is_correct written at submit) and actually
+ * answered. In-progress sittings (is_correct null) are excluded.
+ */
+export const COMPLETED_ANSWER_FILTER =
+  'attempt_id.is.null,and(is_correct.not.is.null,selected_answer.not.is.null)';
+
+/**
+ * Every question the caller has already completed, in any mode. Reads the
+ * unified `answers` table (bank practice + sittings). RLS scopes to the user.
+ */
+async function completedIds(supabase: SupabaseClient): Promise<Set<string>> {
+  const rows = await fetchAllRows<{ id: string; question_id: string }>((from, to) =>
+    supabase
+      .from('answers')
+      .select('id, question_id')
+      .or(COMPLETED_ANSWER_FILTER)
+      .order('id', { ascending: true })
+      .range(from, to),
+  );
+  return new Set(rows.map((r) => r.question_id));
+}
+
+/** Fisher–Yates — a custom set is genuinely randomised, not just sliced. */
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
 export const questionsRouter = createTRPCRouter({
   listByBank: protectedProcedure
@@ -160,5 +208,226 @@ export const questionsRouter = createTRPCRouter({
       }
 
       return { success: true };
+    }),
+
+  // ── Shared history + browse flow ────────────────────────────────────────────
+
+  /**
+   * The set of question ids the current user has completed in any mode. Both
+   * the practice test-builder and the browse page read this to power an
+   * "exclude questions I've already done" toggle.
+   */
+  getCompletedIds: protectedProcedure.query(async ({ ctx }) => {
+    return Array.from(await completedIds(ctx.supabase));
+  }),
+
+  /**
+   * Counts of verified questions per domain, and per skill within each domain,
+   * across every bank the user can see (their own + built-ins, via RLS). Drives
+   * the /question-bank drill-down. Honours an optional difficulty filter and
+   * the same "exclude already done" set as the set-builder, so the numbers the
+   * user sees match what a set would actually draw from.
+   */
+  domainCounts: protectedProcedure
+    .input(
+      z
+        .object({
+          difficulty: z.array(questionDifficultySchema).optional(),
+          excludeCompleted: z.boolean().default(false),
+        })
+        .optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const { supabase } = ctx;
+
+      // Paged: the visible verified pool exceeds PostgREST's 1000-row cap, so a
+      // single select would silently truncate and undercount whole domains.
+      const makeQuery = (from: number, to: number) => {
+        let q = supabase
+          .from('questions')
+          .select('id, domain, skill')
+          .eq('extraction_status', 'verified')
+          .order('id', { ascending: true });
+        if (input?.difficulty?.length) q = q.in('difficulty', input.difficulty);
+        return q.range(from, to);
+      };
+
+      let rows: { id: string; domain: string | null; skill: string | null }[];
+      try {
+        rows = await fetchAllRows(makeQuery);
+      } catch (error) {
+        console.error('❌ [questions.domainCounts] Query failed:', error);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not load counts' });
+      }
+
+      if (input?.excludeCompleted) {
+        const done = await completedIds(supabase);
+        rows = rows.filter((r) => !done.has(r.id));
+      }
+
+      const domains = new Map<string, { total: number; skills: Map<string, number> }>();
+      for (const r of rows) {
+        if (!r.domain) continue;
+        const d = domains.get(r.domain) ?? { total: 0, skills: new Map<string, number>() };
+        d.total += 1;
+        if (r.skill) d.skills.set(r.skill, (d.skills.get(r.skill) ?? 0) + 1);
+        domains.set(r.domain, d);
+      }
+
+      return {
+        // `total` includes any domain-less verified questions, since
+        // "randomize across everything" can still draw them.
+        total: rows.length,
+        domains: Array.from(domains.entries())
+          .map(([domain, v]) => ({
+            domain,
+            total: v.total,
+            skills: Array.from(v.skills.entries())
+              .map(([skill, total]) => ({ skill, total }))
+              .sort((a, b) => a.skill.localeCompare(b.skill)),
+          }))
+          .sort((a, b) => a.domain.localeCompare(b.domain)),
+      };
+    }),
+
+  /**
+   * Assemble a randomized, verified-only question set for the browse flow.
+   *
+   * ═══ Answer-stripping site ═══
+   * Returns only SAFE_QUESTION_COLUMNS — never `correct_answer`/`explanation`.
+   * Those come one at a time from `reveal`, so a set can't be mined for answers.
+   */
+  buildCustomSet: protectedProcedure
+    .input(
+      z.object({
+        domains: z.array(questionDomainSchema).optional(),
+        skills: z.array(z.string()).optional(),
+        difficulty: z.array(questionDifficultySchema).optional(),
+        count: z.number().int().min(1).max(100),
+        excludeCompleted: z.boolean().default(false),
+        /** 'random' shuffles the draw; 'in_order' keeps question position order. */
+        order: z.enum(['random', 'in_order']).default('random'),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { supabase } = ctx;
+
+      // Paged: an unscoped ("randomize everything") or large-domain pool can
+      // exceed 1000 rows, and a truncated pool would bias the random draw.
+      const makeIdQuery = (from: number, to: number) => {
+        let q = supabase
+          .from('questions')
+          .select('id, position')
+          .eq('extraction_status', 'verified')
+          .order('id', { ascending: true });
+        // Skills are the narrower scope; when present they already imply a domain.
+        if (input.skills?.length) q = q.in('skill', input.skills);
+        else if (input.domains?.length) q = q.in('domain', input.domains);
+        if (input.difficulty?.length) q = q.in('difficulty', input.difficulty);
+        return q.range(from, to);
+      };
+
+      let pool: { id: string; position: number | null }[];
+      try {
+        pool = await fetchAllRows<{ id: string; position: number | null }>(makeIdQuery);
+      } catch (error) {
+        console.error('❌ [questions.buildCustomSet] Query failed:', error);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not build the set' });
+      }
+
+      if (input.excludeCompleted) {
+        const done = await completedIds(supabase);
+        pool = pool.filter((r) => !done.has(r.id));
+      }
+
+      // 'in_order' walks the first N questions by position (nulls last, id as a
+      // stable tie-break); 'random' draws a shuffled subset.
+      const chosen =
+        input.order === 'in_order'
+          ? [...pool]
+              .sort((a, b) => {
+                const pa = a.position ?? Number.POSITIVE_INFINITY;
+                const pb = b.position ?? Number.POSITIVE_INFINITY;
+                return pa !== pb ? pa - pb : a.id.localeCompare(b.id);
+              })
+              .slice(0, input.count)
+              .map((r) => r.id)
+          : shuffle(pool.map((r) => r.id)).slice(0, input.count);
+      if (chosen.length === 0) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: input.excludeCompleted
+            ? 'No new questions match that selection. Widen the scope or turn off "exclude already done".'
+            : 'No questions match that selection.',
+        });
+      }
+
+      const { data: rows, error: rowsError } = await supabase
+        .from('questions')
+        .select(SAFE_QUESTION_COLUMNS)
+        .in('id', chosen);
+      if (rowsError) {
+        console.error('❌ [questions.buildCustomSet] Load failed:', rowsError);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not load the set' });
+      }
+
+      // Preserve the chosen order (`in` doesn't).
+      const byId = new Map((rows ?? []).map((r) => [(r as { id: string }).id, r]));
+      const questions = chosen.map((id) => byId.get(id)).filter(Boolean);
+
+      return { questions, requested: input.count, available: pool.length };
+    }),
+
+  /**
+   * Check one question's answer in the untimed question-bank taker: grade the
+   * user's selected choice, hand back the correct answer + explanation, and
+   * record the attempt in the unified `answers` table (`source: 'bank'`,
+   * `attempt_id: null`) with its correctness and per-question time. This is the
+   * single place the taker gets answers, so a set still can't be mined ahead of
+   * a genuine attempt, and the record feeds the same analytics as timed tests.
+   *
+   * `selectedAnswer` is optional so a user could reveal without a pick (recorded
+   * with `is_correct: null`), though the taker requires a selection first.
+   * `timeSpentMs` is the count-up timer's value for this question, used for pace.
+   */
+  check: protectedProcedure
+    .input(
+      z.object({
+        questionId: z.string().uuid(),
+        selectedAnswer: answerLetterSchema.optional(),
+        timeSpentMs: z.number().int().min(0).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { supabase, user } = ctx;
+
+      const { data: q, error } = await supabase
+        .from('questions')
+        .select('id, correct_answer, explanation')
+        .eq('id', input.questionId)
+        .single();
+
+      if (error || !q) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Question not found' });
+      }
+
+      const isCorrect =
+        input.selectedAnswer !== undefined ? input.selectedAnswer === q.correct_answer : null;
+
+      const { error: insertError } = await supabase.from('answers').insert({
+        question_id: q.id,
+        user_id: user.id,
+        source: 'bank',
+        attempt_id: null,
+        selected_answer: input.selectedAnswer ?? null,
+        is_correct: isCorrect,
+        time_spent_ms: input.timeSpentMs ?? null,
+        answered_at: new Date().toISOString(),
+      });
+      if (insertError) {
+        console.error('❌ [questions.check] Failed to record attempt:', insertError);
+      }
+
+      return { correctAnswer: q.correct_answer, explanation: q.explanation, isCorrect };
     }),
 });

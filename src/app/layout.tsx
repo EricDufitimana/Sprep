@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Geist, EB_Garamond, Noto_Serif } from 'next/font/google';
+import { Geist, EB_Garamond, Noto_Serif, Inter } from 'next/font/google';
 import './globals.css';
 import { TRPCReactProvider } from '@/trpc/client';
 
@@ -38,6 +38,18 @@ const notoSerif = Noto_Serif({
   variable: '--font-bluebook',
 });
 
+/**
+ * Reading typeface for the question-bank taker window only (via the
+ * `.qb-reading` utility). Inter at 16px / 1.6 / 0.01em is the setting dialled in
+ * from the /tester sandbox. The exam keeps its Noto Serif Bluebook type; this
+ * face is not applied app-wide.
+ */
+const inter = Inter({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-reading',
+});
+
 export const metadata: Metadata = {
   title: 'SPrep — SAT Trainer',
   description: 'Personal SAT practice: mock tests, vocabulary decoding, and skill tracking.',
@@ -49,7 +61,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${geist.variable} ${garamond.variable} ${notoSerif.variable}`}>
+    <html lang="en" className={`${geist.variable} ${garamond.variable} ${notoSerif.variable} ${inter.variable}`}>
       <head>
         {/* Lineicons — the app's single icon set */}
         <link rel="stylesheet" href="https://cdn.lineicons.com/4.0/lineicons.css" />

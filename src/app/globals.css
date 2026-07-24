@@ -35,6 +35,20 @@
     font-weight: 700;
   }
 
+  /**
+   * Reading typography for the question-bank taker window ONLY (the split-pane
+   * questions + revealed answers). Inter at 16px / 1.6 / 0.01em — the setting
+   * chosen in the /tester sandbox. Deliberately not applied to the exam, which
+   * keeps its Noto Serif Bluebook look (`.dsat-text`). Longhand so `font-bold`
+   * can override the weight cleanly.
+   */
+  .qb-reading {
+    font-family: var(--font-reading), 'Inter', system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    letter-spacing: 0.01em;
+  }
+
   /* Serif accent — EB Garamond italic, the app's one expressive voice */
   .accent-serif {
     font-family: var(--font-serif);

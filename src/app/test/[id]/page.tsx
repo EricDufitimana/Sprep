@@ -52,6 +52,23 @@ export default function TestPage() {
   const [exiting, setExiting] = useState(false);
   const startedAt = useRef<number>(Date.now());
 
+  // Per-question dwell time (ms), so pace can be computed later. `qStartedAt`
+  // marks when the visible question came on screen; `timeByQuestion` holds the
+  // running total per question id; `prevQid` lets the nav effect flush the
+  // question being left.
+  const qStartedAt = useRef<number>(Date.now());
+  const timeByQuestion = useRef<Record<string, number>>({});
+  const prevQid = useRef<string | null>(null);
+
+  /** Fold elapsed-since-onscreen into a question's total and restart the clock. */
+  const accumulateTime = useCallback((qid: string) => {
+    const now = Date.now();
+    const total = (timeByQuestion.current[qid] ?? 0) + (now - qStartedAt.current);
+    timeByQuestion.current[qid] = total;
+    qStartedAt.current = now;
+    return total;
+  }, []);
+
   const questions = useMemo(() => attempt.data?.questions ?? [], [attempt.data]);
 
   // Rehydrate picks and flags — a refresh mid-sitting must not lose work.
@@ -69,6 +86,19 @@ export default function TestPage() {
 
   const save = useMutation(trpc.answers.save.mutationOptions());
 
+  // When the visible question changes, flush the time spent on the one being
+  // left so its dwell time is persisted even if the student never re-picks.
+  useEffect(() => {
+    const nextQid = questions[current]?.id ?? null;
+    const leaving = prevQid.current;
+    if (leaving && leaving !== nextQid) {
+      save.mutate({ attemptId, questionId: leaving, timeSpentMs: accumulateTime(leaving) });
+    }
+    qStartedAt.current = Date.now();
+    prevQid.current = nextQid;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, questions]);
+
   const submit = useMutation(
     trpc.tests.submit.mutationOptions({
       onSuccess: async () => {
@@ -85,9 +115,14 @@ export default function TestPage() {
   const doSubmit = useCallback(() => {
     if (submitted) return;
     setSubmitted(true);
+    // Flush the time spent on the question currently on screen before grading.
+    const leaving = prevQid.current;
+    if (leaving) {
+      save.mutate({ attemptId, questionId: leaving, timeSpentMs: accumulateTime(leaving) });
+    }
     const elapsed = Math.round((Date.now() - startedAt.current) / 1000);
     submit.mutate({ attemptId, timeUsedSeconds: elapsed });
-  }, [submitted, submit, attemptId]);
+  }, [submitted, submit, attemptId, save, accumulateTime]);
 
   // Countdown, mirroring Bluebook's m:ss readout in the header.
   const timerSeconds = attempt.data?.timerSeconds ?? null;
@@ -143,13 +178,18 @@ export default function TestPage() {
   const select = (letter: string) => {
     const next = answers[q.id] === letter ? null : letter;
     setAnswers((prev) => ({ ...prev, [q.id]: next }));
-    save.mutate({ attemptId, questionId: q.id, selectedAnswer: next as 'A' | 'B' | 'C' | 'D' | null });
+    save.mutate({
+      attemptId,
+      questionId: q.id,
+      selectedAnswer: next as 'A' | 'B' | 'C' | 'D' | null,
+      timeSpentMs: accumulateTime(q.id),
+    });
   };
 
   const toggleFlag = () => {
     const next = !flags[q.id];
     setFlags((prev) => ({ ...prev, [q.id]: next }));
-    save.mutate({ attemptId, questionId: q.id, flagged: next });
+    save.mutate({ attemptId, questionId: q.id, flagged: next, timeSpentMs: accumulateTime(q.id) });
   };
 
   const toggleStrike = (letter: string) => {

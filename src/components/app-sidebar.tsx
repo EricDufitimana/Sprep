@@ -23,6 +23,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: 'grid-alt' },
   { label: 'Practice', href: '/dashboard/practice', icon: 'pencil' },
+  { label: 'Question Bank', href: '/dashboard/question-bank', icon: 'library' },
   { label: 'Vocabulary', href: '/dashboard/vocabulary', icon: 'book' },
   { label: 'Progress', href: '/dashboard/progress', icon: 'bar-chart' },
 ];
