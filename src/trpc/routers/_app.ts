@@ -1,0 +1,25 @@
+import { createTRPCRouter } from '../init';
+import { healthRouter } from './health';
+import { answersRouter } from './answers';
+import { profileRouter } from './profile';
+import { progressRouter } from './progress';
+import { questionBanksManagementRouter } from './question-banks-management';
+import { modulesManagementRouter } from './modules-management';
+import { questionsRouter } from './questions';
+import { testsRouter } from './tests';
+import { vocabularyManagementRouter } from './vocabulary-management';
+
+export const appRouter = createTRPCRouter({
+  health: healthRouter,
+  tests: testsRouter,
+  answers: answersRouter,
+  questions: questionsRouter,
+  questionBanksManagement: questionBanksManagementRouter,
+  modulesManagement: modulesManagementRouter,
+  vocabularyManagement: vocabularyManagementRouter,
+  progress: progressRouter,
+  profile: profileRouter,
+});
+
+// export type definition of API
+export type AppRouter = typeof appRouter;

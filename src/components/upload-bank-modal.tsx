@@ -1,0 +1,258 @@
+'use client';
+
+import { useRef, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTRPC } from '@/trpc/client';
+import { createClient } from '@/utils/supabase/client';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
+import { Input } from '@/components/ui/input';
+import { Modal } from '@/components/ui/modal';
+import { ProgressBar } from '@/components/ui/progress-bar';
+
+interface UploadBankModalProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+type Phase = 'form' | 'uploading' | 'parsing' | 'done';
+
+/**
+ * One file in, a bank out.
+ *
+ * The College Board "Answers" export already carries the correct answer and
+ * rationale for every question, so there's nothing to cross-check against and
+ * no second file to ask for. The server parses it deterministically.
+ */
+export function UploadBankModal({ open, onClose }: UploadBankModalProps) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+
+  const [phase, setPhase] = useState<Phase>('form');
+  const [name, setName] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pct, setPct] = useState(0);
+  const [result, setResult] = useState<{ verified: number; problems: string[] } | null>(null);
+
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const createFromPdf = useMutation(
+    trpc.questionBanksManagement.createFromPdf.mutationOptions({
+      onSuccess: async (res) => {
+        setResult({ verified: res.verified, problems: res.problems });
+        setPhase('done');
+        await queryClient.invalidateQueries();
+      },
+      onError: (e) => {
+        setError(e.message);
+        setPhase('form');
+      },
+    }),
+  );
+
+  const reset = () => {
+    setPhase('form');
+    setName('');
+    setFile(null);
+    setError(null);
+    setPct(0);
+    setResult(null);
+  };
+
+  const close = () => {
+    if (phase === 'uploading' || phase === 'parsing') return;
+    reset();
+    onClose();
+  };
+
+  const submit = async () => {
+    setError(null);
+    if (!file) return setError('Choose the answers PDF.');
+
+    const bankName = name.trim() || file.name.replace(/\.pdf$/i, '');
+
+    setPhase('uploading');
+    try {
+      const supabase = createClient();
+      const { data: auth } = await supabase.auth.getUser();
+      const uid = auth.user?.id;
+      if (!uid) throw new Error('Your session expired. Sign in again.');
+
+      // Path is namespaced by user id — that's what the bucket's RLS checks.
+      const path = `${uid}/${Date.now()}/${file.name.replace(/[^\w.-]/g, '_')}`;
+      setPct(30);
+
+      const { error: upErr } = await supabase.storage
+        .from('question-papers')
+        .upload(path, file, { upsert: false, contentType: file.type || 'application/pdf' });
+
+      if (upErr) throw new Error(`Upload failed: ${upErr.message}`);
+
+      setPct(100);
+      setPhase('parsing');
+      createFromPdf.mutate({ name: bankName, sourcePath: path });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload failed.');
+      setPhase('form');
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={close}
+      title={phase === 'done' ? 'Bank created' : 'Create a test'}
+      footer={
+        phase === 'form' ? (
+          <>
+            <Button variant="ghost" onClick={close}>Cancel</Button>
+            <Button onClick={submit}>
+              <Icon name="cloud-upload" className="text-small" />
+              Upload &amp; extract
+            </Button>
+          </>
+        ) : phase === 'done' ? (
+          <Button onClick={close}>Done</Button>
+        ) : undefined
+      }
+    >
+      {phase === 'form' && (
+        <div className="space-y-4">
+          <FilePick
+            file={file}
+            inputRef={fileRef}
+            onPick={(f) => {
+              setFile(f);
+              if (f && !name.trim()) setName(f.name.replace(/\.pdf$/i, ''));
+            }}
+          />
+
+          <Input
+            label="Bank name"
+            placeholder="e.g. Practice Test 4 — Reading & Writing"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            hint="Defaults to the file name."
+          />
+
+          <p className="rounded-control bg-blue-wash px-3 py-2 text-small text-ink-500">
+            Use the <strong className="font-medium text-ink-700">Answers</strong> export — the one
+            containing each question’s correct answer and rationale. Questions, options, answers,
+            domains, and skills are all read from it.
+          </p>
+
+          {error && (
+            <p role="alert" className="rounded-control bg-miss-tint px-3 py-2 text-small text-miss">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+
+      {(phase === 'uploading' || phase === 'parsing') && (
+        <div className="space-y-3 py-4">
+          <p className="text-body text-ink-700">
+            {phase === 'uploading' ? 'Uploading the PDF…' : 'Reading the questions…'}
+          </p>
+          <ProgressBar value={phase === 'parsing' ? 100 : pct} label="Progress" />
+          {phase === 'parsing' && (
+            <p className="text-micro text-ink-400">
+              Extracting each question, its options, correct answer, and rationale.
+            </p>
+          )}
+        </div>
+      )}
+
+      {phase === 'done' && result && (
+        <div className="space-y-4">
+          <div className="rounded-control bg-green-tint px-4 py-4 text-center">
+            <p className="text-h1 font-semibold text-ink-900 tabular-nums">{result.verified}</p>
+            <p className="text-micro text-ink-700">questions ready to sit</p>
+          </div>
+
+          {result.problems.length > 0 ? (
+            <div className="rounded-control bg-amber-tint px-3 py-2">
+              <p className="text-small font-medium text-ink-900">
+                {result.problems.length} block{result.problems.length === 1 ? '' : 's'} skipped
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {result.problems.slice(0, 5).map((p) => (
+                  <li key={p} className="text-micro text-ink-700">{p}</li>
+                ))}
+                {result.problems.length > 5 && (
+                  <li className="text-micro text-ink-500">…and {result.problems.length - 5} more</li>
+                )}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-small text-ink-500">
+              Every question in the file parsed cleanly.
+            </p>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function FilePick({
+  file,
+  inputRef,
+  onPick,
+}: {
+  file: File | null;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onPick: (f: File | null) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+
+  return (
+    <div>
+      <p className="mb-1.5 text-small font-medium text-ink-700">Answers PDF</p>
+      <button
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          const dropped = e.dataTransfer.files?.[0];
+          if (dropped && dropped.type === 'application/pdf') onPick(dropped);
+        }}
+        className={cn(
+          'flex w-full items-center gap-3 rounded-control border border-dashed px-4 py-5 text-left transition-colors',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue',
+          dragging
+            ? 'border-blue bg-blue-tint'
+            : file
+              ? 'border-blue/50 bg-blue-wash'
+              : 'border-line hover:border-ink-400/50',
+        )}
+      >
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-control bg-surface text-ink-500">
+          <Icon name={file ? 'files' : 'cloud-upload'} className="text-base" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-body text-ink-900">
+            {file ? file.name : 'Choose a PDF, or drop one here'}
+          </span>
+          <span className="block text-micro text-ink-400">
+            {file ? `${(file.size / 1024).toFixed(0)} KB` : 'The College Board “Answers” export'}
+          </span>
+        </span>
+      </button>
+      <input
+        ref={inputRef as React.RefObject<HTMLInputElement>}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+      />
+    </div>
+  );
+}

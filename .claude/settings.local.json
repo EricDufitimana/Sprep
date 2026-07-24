@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /Users/dufitimanaeric/Desktop/Coding/SPrep; echo \"---\"; ls -la /Users/dufitimanaeric/.claude/skills 2>/dev/null; echo \"---\"; ls -la /Users/dufitimanaeric/Desktop/Coding/SPrep/.claude 2>/dev/null)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

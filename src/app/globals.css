@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Hairline default so `border` alone reads as the token line color */
+  * {
+    @apply border-line;
+  }
+
+  ::selection {
+    @apply bg-blue-tint text-ink-900;
+  }
+
+  /* Numbers align in tables, timers, and scores */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  /**
+   * Official Digital SAT question typography, per College Board's Digital SAT
+   * Suite Technical Manual: Noto Serif, 15/24, weight 400.
+   *
+   * "15/24" is CSS `font` shorthand — `font: 15px/24px` — so these are pixels,
+   * not CSS `pt`. Writing them as `pt` makes the browser apply 1pt = 1.333px
+   * and renders 20px/32px, a third larger than the exam.
+   */
+  .dsat-text {
+    font: 400 15px/24px var(--font-bluebook), 'Noto Serif', Georgia, serif;
+  }
+
+  .dsat-bold {
+    font-weight: 700;
+  }
+
+  /* Serif accent — EB Garamond italic, the app's one expressive voice */
+  .accent-serif {
+    font-family: var(--font-serif);
+    font-style: italic;
+    letter-spacing: 0;
+  }
+
+  /* Same utility CRC's sidebar uses: scrollable without a visible scrollbar */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
