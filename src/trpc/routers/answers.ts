@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, protectedProcedure } from '../init';
 import { answerLetterSchema } from '@/lib/validation';
+import { DIAGNOSIS_KEYS } from '@/lib/diagnosis';
 
 /**
  * Per-question writes during a sitting.
@@ -85,18 +86,17 @@ export const answersRouter = createTRPCRouter({
     }),
 
   /**
-   * Writes the "why I missed it" note that gates the explanation reveal on the
-   * results screen. Allowed after submission — that is when the user writes it.
+   * Records "why I missed it" on the results screen as one of a fixed set of
+   * reasons (see lib/diagnosis.ts) rather than free text, so the choices
+   * aggregate on the Progress page. Passing `reason: null` clears it. Allowed
+   * after submission — that is when the learner reflects on the miss.
    */
   saveDiagnosis: protectedProcedure
     .input(
       z.object({
         attemptId: z.string().uuid(),
         questionId: z.string().uuid(),
-        text: z
-          .string()
-          .min(10, { message: 'Write at least a sentence about what went wrong' })
-          .max(2000, { message: 'Keep the diagnosis under 2000 characters' }),
+        reason: z.enum(DIAGNOSIS_KEYS).nullable(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -117,7 +117,7 @@ export const answersRouter = createTRPCRouter({
 
       const { error } = await supabase
         .from('answers')
-        .update({ self_diagnosis: input.text })
+        .update({ self_diagnosis: input.reason })
         .eq('attempt_id', input.attemptId)
         .eq('question_id', input.questionId);
 

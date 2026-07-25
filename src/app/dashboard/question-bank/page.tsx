@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTRPC } from '@/trpc/client';
 import { PageHeader } from '@/components/page-header';
 import { Reveal } from '@/components/reveal';
+import { RichText } from '@/components/rich-text';
 import { Button } from '@/components/ui/button';
 import { Card, CardBody } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
@@ -677,7 +678,9 @@ function Taker({
                   Passage
                 </p>
                 <div className="rounded-2xl border border-[#EFE9DC] bg-[#FFFDF8] px-7 py-6 shadow-[0_1px_0_rgba(0,0,0,0.02)]">
-                  <p className="qb-reading whitespace-pre-line text-[#2E2A23]">{q.passage}</p>
+                  <p className="qb-reading whitespace-pre-line text-[#2E2A23]">
+                    <RichText>{q.passage}</RichText>
+                  </p>
                 </div>
               </>
             ) : (
@@ -711,7 +714,9 @@ function Taker({
             </div>
 
             {/* Question stem */}
-            <p className="qb-reading mb-6 font-bold text-[#23201B]">{q.question_text}</p>
+            <p className="qb-reading mb-6 font-bold text-[#23201B]">
+              <RichText>{q.question_text}</RichText>
+            </p>
 
             {/* Options */}
             <div role="radiogroup" aria-label="Answer choices" className="space-y-3">
@@ -755,7 +760,9 @@ function Taker({
                     >
                       {opt.letter}
                     </span>
-                    <span className="qb-reading flex-1 text-[#2E2A23]">{opt.text}</span>
+                    <span className="qb-reading flex-1 text-[#2E2A23]">
+                      <RichText>{opt.text}</RichText>
+                    </span>
                   </button>
                 );
               })}
@@ -805,7 +812,7 @@ function Taker({
                       Explanation
                     </p>
                     <p className="qb-reading whitespace-pre-line text-[#4A453B]">
-                      {st.result.explanation}
+                      <RichText>{st.result.explanation}</RichText>
                     </p>
                   </div>
                 )}

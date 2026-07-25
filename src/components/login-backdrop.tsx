@@ -21,7 +21,7 @@ import gsap from 'gsap';
  * simply sit scattered in place and the headline is inert.
  */
 
-const HEADLINE = 'Know every question type.';
+const HEADLINE = 'Know every question\ntype.';
 
 /** The real R&W skills the app trains — the copy is the product. */
 const PILLS = [
@@ -61,6 +61,7 @@ export function LoginBackdrop() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const labelsRef = useRef<HTMLDivElement>(null);
   const headlineRef = useRef<HTMLHeadingElement>(null);
+  const headlineWrapRef = useRef<HTMLDivElement>(null);
   // The scattered static pills are the reduced-motion fallback only. Rendering
   // them client-side (never in SSR) sidesteps float/colour hydration mismatch.
   const [showStatic, setShowStatic] = useState(false);
@@ -74,40 +75,86 @@ export function LoginBackdrop() {
 
     const mm = gsap.matchMedia();
 
-    // ---- Headline stretch (independent of the pills) -----------------------
+    // ---- Headline repel (independent of the pills) -------------------------
+    // The cursor parts the headline: letters within RADIUS flee radially away
+    // from the pointer — further the closer they are — with a little spin. Each
+    // letter is driven by an under-damped spring toward its target, so it
+    // overshoots and wobbles both as it's pushed and as it springs back to rest
+    // when the cursor leaves.
     mm.add('(prefers-reduced-motion: no-preference)', () => {
+      const wrap = headlineWrapRef.current;
       const letters = headline
         ? gsap.utils.toArray<HTMLElement>('.lb-letter', headline)
         : [];
-      const setters = letters.map((el) => ({
-        sx: gsap.quickTo(el, 'scaleX', { duration: 0.4, ease: 'power3' }),
-        x: gsap.quickTo(el, 'x', { duration: 0.4, ease: 'power3' }),
-        y: gsap.quickTo(el, 'y', { duration: 0.4, ease: 'power3' }),
-      }));
+      if (!wrap || letters.length === 0) return;
 
-      const onMove = (e: PointerEvent) => {
-        if (!headline) return;
-        const hb = headline.getBoundingClientRect();
-        const px = e.clientX;
-        letters.forEach((el, i) => {
+      // Each letter's resting centre, stored as an offset from the wrapper's
+      // top-left. Measured with transforms cleared so the maths reads a stable
+      // base and never feeds back on itself; re-measured on resize.
+      let base: { dx: number; dy: number }[] = [];
+      const measure = () => {
+        letters.forEach((el) => (el.style.transform = ''));
+        const wr = wrap.getBoundingClientRect();
+        base = letters.map((el) => {
           const lb = el.getBoundingClientRect();
-          const cx = lb.left + lb.width / 2;
-          const falloff = Math.max(0, 1 - Math.abs(px - cx) / 220);
-          setters[i].sx(1 + falloff * 0.9);
-          setters[i].x((px > cx ? -1 : 1) * falloff * 6);
-          setters[i].y(-falloff * (e.clientY < hb.top + hb.height / 2 ? 4 : -4));
+          return { dx: lb.left + lb.width / 2 - wr.left, dy: lb.top + lb.height / 2 - wr.top };
         });
       };
-      const onLeave = () =>
-        letters.forEach((el) =>
-          gsap.to(el, { scaleX: 1, x: 0, y: 0, duration: 0.9, ease: 'elastic.out(1, 0.35)' }),
-        );
+      measure();
 
+      // Per-letter spring state: current position/rotation, velocity, target.
+      const st = letters.map(() => ({ x: 0, y: 0, r: 0, vx: 0, vy: 0, vr: 0, tx: 0, ty: 0, tr: 0 }));
+
+      const RADIUS = 170;
+      const PUSH = 72;
+      const setTargets = (px: number, py: number) => {
+        const wr = wrap.getBoundingClientRect();
+        for (let i = 0; i < letters.length; i++) {
+          const cx = wr.left + base[i].dx;
+          const cy = wr.top + base[i].dy;
+          const dx = cx - px;
+          const dy = cy - py;
+          const dist = Math.hypot(dx, dy) || 1;
+          const f = Math.max(0, 1 - dist / RADIUS);
+          const ease = f * f; // sharper near the cursor, gentle at the edge
+          st[i].tx = (dx / dist) * PUSH * ease;
+          st[i].ty = (dy / dist) * PUSH * ease;
+          st[i].tr = (dx >= 0 ? 1 : -1) * ease * 26;
+        }
+      };
+      const clearTargets = () => st.forEach((s) => ((s.tx = 0), (s.ty = 0), (s.tr = 0)));
+
+      // Under-damped spring: low stiffness + light damping ⇒ visible overshoot
+      // and a couple of wobbles before settling. Tune STIFF↑ / DAMP↓ = springier.
+      const STIFF = 0.16;
+      const DAMP = 0.8;
+      let raf = 0;
+      const loop = () => {
+        for (let i = 0; i < letters.length; i++) {
+          const s = st[i];
+          s.vx = (s.vx + (s.tx - s.x) * STIFF) * DAMP;
+          s.vy = (s.vy + (s.ty - s.y) * STIFF) * DAMP;
+          s.vr = (s.vr + (s.tr - s.r) * STIFF) * DAMP;
+          s.x += s.vx;
+          s.y += s.vy;
+          s.r += s.vr;
+          letters[i].style.transform = `translate(${s.x.toFixed(2)}px, ${s.y.toFixed(2)}px) rotate(${s.r.toFixed(2)}deg)`;
+        }
+        raf = requestAnimationFrame(loop);
+      };
+      raf = requestAnimationFrame(loop);
+
+      const onMove = (e: PointerEvent) => setTargets(e.clientX, e.clientY);
+      const onLeave = () => clearTargets();
       root.addEventListener('pointermove', onMove);
       root.addEventListener('pointerleave', onLeave);
+      window.addEventListener('resize', measure);
       return () => {
+        cancelAnimationFrame(raf);
         root.removeEventListener('pointermove', onMove);
         root.removeEventListener('pointerleave', onLeave);
+        window.removeEventListener('resize', measure);
+        letters.forEach((el) => (el.style.transform = ''));
       };
     });
 
@@ -127,8 +174,23 @@ export function LoginBackdrop() {
       canvas.style.width = `${W}px`;
       canvas.style.height = `${H}px`;
 
-      // Reserve the bottom band for the headline so pills settle above it.
-      const groundY = H - 168;
+      // Two floors so the pills split between the copy and the panel floor:
+      //   • `ground` spans the full width at the base of the panel
+      //   • `shelf` is a narrow platform pinned to the top edge of the centred
+      //     headline, only as wide as the copy — pills that drop over it pile on
+      //     the headline, while pills to either side slip past and hit the floor.
+      // The shelf is capped well under the panel width so there are always clear
+      // side lanes down to the floor, on any screen size.
+      const h2 = headlineRef.current;
+      const h2Rect = h2 ? h2.getBoundingClientRect() : null;
+      const shelfY = h2Rect ? Math.round(h2Rect.top - rect.top) - 14 : Math.round(H * 0.5);
+      const shelfW = Math.min(
+        h2Rect ? Math.round(h2Rect.width) + 24 : Math.round(W * 0.5),
+        Math.round(W * 0.6),
+      );
+      const shelfLeft = W / 2 - shelfW / 2;
+      const shelfRight = W / 2 + shelfW / 2;
+      const bottomY = H; // floor flush with the panel's bottom edge
 
       const engine = Matter.Engine.create({ gravity: { y: 1 } });
       const render = Matter.Render.create({
@@ -147,10 +209,18 @@ export function LoginBackdrop() {
         isStatic: true,
         render: { fillStyle: 'transparent' },
       };
-      const ground = Matter.Bodies.rectangle(W / 2, groundY + 50, W * 2, 100, staticOpts);
+      // Full-width floor at the base of the panel.
+      const ground = Matter.Bodies.rectangle(W / 2, bottomY + 50, W * 2, 100, staticOpts);
+      // Narrow, thin shelf sitting on the top edge of the headline. Its top
+      // surface is at shelfY; pills whose centre lands over it rest on the copy,
+      // pills whose centre is past its edges topple off into the side lanes.
+      const shelf = Matter.Bodies.rectangle(W / 2, shelfY + 7, shelfW, 14, {
+        ...staticOpts,
+        chamfer: { radius: 7 },
+      });
       const wallL = Matter.Bodies.rectangle(-55, H / 2, 100, H * 2, staticOpts);
       const wallR = Matter.Bodies.rectangle(W + 55, H / 2, 100, H * 2, staticOpts);
-      Matter.Composite.add(engine.world, [ground, wallL, wallR]);
+      Matter.Composite.add(engine.world, [ground, shelf, wallL, wallR]);
 
       const bodies: Matter.Body[] = [];
       const labelEls: HTMLDivElement[] = [];
@@ -176,8 +246,22 @@ export function LoginBackdrop() {
             const w = Math.ceil(probe.offsetWidth) + 40;
             const color = PILL_COLORS[i % PILL_COLORS.length];
 
+            // Split the drop columns so both piles always appear: even pills fall
+            // over the shelf (land on the headline), odd pills fall into a side
+            // lane (slip past the copy and reach the floor), alternating sides.
+            let spawnX: number;
+            if (i % 2 === 0) {
+              spawnX = W / 2 + (seeded(i) - 0.5) * shelfW * 0.7;
+            } else if (i % 4 === 1) {
+              // Left lane: clearly left of the shelf edge, down to the wall.
+              spawnX = 40 + seeded(i) * Math.max(10, shelfLeft - 64);
+            } else {
+              // Right lane.
+              spawnX = shelfRight + 24 + seeded(i) * Math.max(10, W - 64 - shelfRight);
+            }
+
             const body = Matter.Bodies.rectangle(
-              W / 2 + (seeded(i) - 0.5) * (W * 0.6),
+              spawnX,
               -60 - seeded(i + 100) * 340,
               w,
               h,
@@ -360,21 +444,30 @@ export function LoginBackdrop() {
         ))}
       </div>
 
-      {/* Stretchy headline + tagline, anchored bottom-left in the reserved band. */}
-      <div className="absolute inset-x-0 bottom-0 z-10 p-12">
+      {/* Stretchy headline + tagline, centred in the panel. The pills fall from
+          the top and pile up onto this block (the physics ground is pinned to
+          its top edge — see build()), so the copy is the shelf the pills land on. */}
+      <div
+        ref={headlineWrapRef}
+        className="absolute inset-x-0 top-1/2 z-10 flex -translate-y-1/2 flex-col items-center px-12 text-center"
+      >
         <h2
           ref={headlineRef}
-          className="max-w-md cursor-default select-none text-[2.75rem] font-semibold leading-[1.05] tracking-tight text-ink-900"
+          className="max-w-sm cursor-default select-none text-[2.25rem] font-semibold leading-[1.05] tracking-tight text-ink-900"
         >
-          {HEADLINE.split('').map((ch, i) => (
-            <span
-              key={i}
-              className="lb-letter inline-block origin-left"
-              style={{ whiteSpace: ch === ' ' ? 'pre' : 'normal' }}
-            >
-              {ch === ' ' ? ' ' : ch}
-            </span>
-          ))}
+          {HEADLINE.split('').map((ch, i) =>
+            ch === '\n' ? (
+              <br key={i} />
+            ) : (
+              <span
+                key={i}
+                className="lb-letter inline-block origin-center"
+                style={{ whiteSpace: ch === ' ' ? 'pre' : 'normal' }}
+              >
+                {ch === ' ' ? ' ' : ch}
+              </span>
+            ),
+          )}
         </h2>
         <p className="mt-3 max-w-sm text-body text-ink-900/70">
           Every Reading &amp; Writing skill, drilled until it stops being a weak spot.

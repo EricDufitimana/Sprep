@@ -153,13 +153,19 @@ function LoginPanel() {
 export default function LoginPage() {
   return (
     <div className="grid min-h-dvh lg:grid-cols-2">
-      <Suspense>
+      {/* LoginPanel reads useSearchParams, so on the server this Suspense
+          boundary renders its fallback. The fallback must occupy the left grid
+          cell — otherwise the backdrop is the only child during load and grid
+          auto-places it into column 1, then it visibly jumps to column 2 once
+          the panel hydrates. */}
+      <Suspense fallback={<div className="min-h-dvh bg-surface lg:col-start-1" />}>
         <LoginPanel />
       </Suspense>
 
       {/* Animated artwork panel — decorative, so it's hidden from assistive
-          tech and dropped entirely on narrow screens. */}
-      <div className="hidden lg:block">
+          tech and dropped entirely on narrow screens. Pinned to column 2 so it
+          stays on the right regardless of what has rendered on the left yet. */}
+      <div className="hidden lg:col-start-2 lg:block">
         <LoginBackdrop />
       </div>
     </div>

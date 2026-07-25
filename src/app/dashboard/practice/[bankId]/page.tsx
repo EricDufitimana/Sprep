@@ -15,6 +15,7 @@ import { ProgressBar } from '@/components/ui/progress-bar';
 import { Modal } from '@/components/ui/modal';
 import { Stat } from '@/components/ui/stat';
 import { QuestionMeta, QuestionReview } from '@/components/question-review';
+import { RichText } from '@/components/rich-text';
 import { accuracyTone, domainLabel, formatDuration, formatRelative } from '@/lib/labels';
 import { cn } from '@/lib/utils';
 
@@ -180,7 +181,9 @@ export default function BankDetailPage() {
                     className="w-full rounded-control border border-line px-3 py-2 text-left transition-colors hover:border-ink-400/50 hover:bg-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      <p className="line-clamp-2 text-small text-ink-700">{q.questionText}</p>
+                      <p className="line-clamp-2 text-small text-ink-700">
+                        <RichText>{q.questionText}</RichText>
+                      </p>
                       <span className="shrink-0 text-small font-medium text-miss tabular-nums">
                         {q.missed}× wrong
                       </span>
@@ -231,7 +234,9 @@ export default function BankDetailPage() {
               >
                 <span className="w-7 shrink-0 text-small text-ink-400 tabular-nums">{i + 1}</span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-small text-ink-700">{q.questionText}</p>
+                  <p className="truncate text-small text-ink-700">
+                    <RichText>{q.questionText}</RichText>
+                  </p>
                   <p className="text-micro text-ink-400">
                     {q.skill ?? domainLabel(q.domain)}
                     {q.seen > 0 && ` · seen ${q.seen}×`}

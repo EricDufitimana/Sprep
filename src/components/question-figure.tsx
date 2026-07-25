@@ -3,6 +3,12 @@
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
+import { RichText } from '@/components/rich-text';
+
+/** Flatten the inline formatting tags for use in a plain-string context (alt). */
+function plain(s: string): string {
+  return s.replace(/<\/?(?:u|em|strong|sub|sup)>/gi, '');
+}
 
 export interface QuestionFigureProps {
   /** Public URL of the cropped figure, or null when the question has none. */
@@ -31,7 +37,7 @@ export function QuestionFigure({ url, description, className }: QuestionFigurePr
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={url}
-          alt={description ?? 'Figure accompanying this question'}
+          alt={description ? plain(description) : 'Figure accompanying this question'}
           onError={() => setFailed(true)}
           className="mx-auto max-h-[420px] w-auto max-w-full rounded-control border border-line bg-surface"
         />
@@ -55,7 +61,9 @@ export function QuestionFigure({ url, description, className }: QuestionFigurePr
       <figcaption className="mb-1 text-micro font-medium uppercase tracking-wide text-ink-400">
         Figure
       </figcaption>
-      <p className="whitespace-pre-line text-small leading-6 text-ink-700">{description}</p>
+      <p className="whitespace-pre-line text-small leading-6 text-ink-700">
+        <RichText>{description}</RichText>
+      </p>
     </figure>
   );
 }

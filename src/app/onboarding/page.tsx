@@ -152,14 +152,14 @@ export default function OnboardingPage() {
           )}
 
           {step === 'target' && (
-            <StepShell title="What score are you aiming for?" subtitle="Optional — it sets the bar on your progress page.">
+            <StepShell title="What score are you aiming for in the Reading & Writing Section?" subtitle="Optional — it sets the bar on your progress page.">
               <Input
                 label="Target score"
                 type="number"
-                min={400}
-                max={1600}
+                min={100}
+                max={800}
                 step={10}
-                placeholder="1400"
+                placeholder="720"
                 value={targetScore}
                 onChange={(e) => setTargetScore(e.target.value)}
                 hint="400–1600"

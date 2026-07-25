@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTRPC } from '@/trpc/client';
 import { cn } from '@/lib/utils';
 import { QuestionFigure } from '@/components/question-figure';
+import { RichText } from '@/components/rich-text';
 
 /**
  * The sitting screen, styled to mimic Bluebook — the real digital SAT app.
@@ -277,7 +278,7 @@ export default function TestPage() {
             />
             {q.passage && (
               <p className="dsat-text whitespace-pre-line">
-                {q.passage}
+                <RichText>{q.passage}</RichText>
               </p>
             )}
           </section>
@@ -319,7 +320,7 @@ export default function TestPage() {
             </div>
 
             <p className="dsat-text dsat-bold mb-5">
-              {q.question_text}
+              <RichText>{q.question_text}</RichText>
             </p>
 
             <div role="radiogroup" aria-label="Answer choices" className="space-y-3">
@@ -357,7 +358,7 @@ export default function TestPage() {
                       <span
                         className={cn('dsat-text', isStruck && 'line-through')}
                       >
-                        {opt.text}
+                        <RichText>{opt.text}</RichText>
                       </span>
                     </button>
 

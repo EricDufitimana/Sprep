@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { QuestionFigure } from '@/components/question-figure';
+import { RichText } from '@/components/rich-text';
 
 export interface ReviewQuestion {
   questionText: string;
@@ -46,11 +47,13 @@ export function QuestionReview({
 
       {question.passage && (
         <p className="mb-3 whitespace-pre-line text-small leading-6 text-ink-500">
-          {question.passage}
+          <RichText>{question.passage}</RichText>
         </p>
       )}
 
-      <p className="mb-3 text-body font-medium text-ink-900">{question.questionText}</p>
+      <p className="mb-3 text-body font-medium text-ink-900">
+        <RichText>{question.questionText}</RichText>
+      </p>
 
       <div className="space-y-1.5">
         {options.map((opt) => {
@@ -75,7 +78,9 @@ export function QuestionReview({
               className={cn('flex items-baseline gap-2.5 rounded-control border px-3 py-2 text-small', tone)}
             >
               <span className="font-semibold">{opt.letter}</span>
-              <span className="flex-1">{opt.text}</span>
+              <span className="flex-1">
+                <RichText>{opt.text}</RichText>
+              </span>
               {isPick && (
                 <span className="shrink-0 text-micro font-medium text-ink-500">your answer</span>
               )}
@@ -102,7 +107,7 @@ export function QuestionReview({
               Why
             </p>
             <p className="whitespace-pre-line text-small leading-6 text-ink-700">
-              {question.explanation}
+              <RichText>{question.explanation}</RichText>
             </p>
           </div>
         )

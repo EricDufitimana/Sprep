@@ -93,6 +93,24 @@ function safeCodePoint(n) {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * Inline formatting preserved through the strip.
+ * The SAT renders a handful of inline styles that carry meaning — most
+ * importantly the <u>underlined phrase</u> that "which choice supports the
+ * underlined sentence" questions refer to, plus italic titles (<em>), bold
+ * (<strong>), and chemistry/math sub/superscripts. We keep exactly these,
+ * normalized to their bare form (attributes dropped), so the marker survives
+ * into the stored text and is interpreted by the <RichText> renderer. Every
+ * other tag (spans, block wrappers, figures, …) is still removed.
+ * ------------------------------------------------------------------ */
+const INLINE_KEEP = new Set(['u', 'em', 'strong', 'sub', 'sup']);
+function stripTagsKeepInline(s) {
+  return s.replace(/<(\/?)([a-zA-Z0-9]+)(?:\s[^>]*)?\/?>/g, (_, slash, name) => {
+    const tag = name.toLowerCase();
+    return INLINE_KEEP.has(tag) ? `<${slash}${tag}>` : '';
+  });
+}
+
 /** Collapse runs of spaces per line, drop blank lines, trim. */
 function collapse(s) {
   return s
@@ -125,7 +143,7 @@ function htmlToText(html) {
   s = s.replace(/<span[^>]*class="sr-only"[^>]*>[\s\S]*?<\/span>/gi, '');
   s = s.replace(/<br\s*\/?>/gi, '\n');
   s = s.replace(/<\/(p|div|li|tr|h[1-6]|figcaption|caption|blockquote)>/gi, '\n');
-  s = s.replace(/<[^>]+>/g, '');
+  s = stripTagsKeepInline(s);
   s = decodeEntities(s);
   return collapse(s);
 }
@@ -133,8 +151,9 @@ function htmlToText(html) {
 /** Inline HTML → single clean line (choices, table cells). */
 function inlineText(html) {
   let s = html.replace(/<span[^>]*class="sr-only"[^>]*>[\s\S]*?<\/span>/gi, '');
-  s = decodeEntities(s.replace(/<[^>]+>/g, ' '));
-  return s.replace(/\s+/g, ' ').trim();
+  s = s.replace(/<\/(p|div|li)>/gi, ' '); // block breaks → space (choices are usually one <p>)
+  s = decodeEntities(stripTagsKeepInline(s));
+  return s.replace(/[ \t\n\r\f]+/g, ' ').trim();
 }
 
 /* ------------------------------------------------------------------ *
@@ -266,7 +285,7 @@ function detectVisual(stem) {
 /* ------------------------------------------------------------------ *
  * Map one source record → a row (or a rejection).
  * ------------------------------------------------------------------ */
-function mapQuestion(src) {
+export function mapQuestion(src) {
   const extId = src.external_id || src.questionId || null;
 
   // Skill: unknown codes are never guessed — skip and log.
@@ -354,6 +373,7 @@ function parseArgs(argv) {
     else if (a === '--bank-id') opts.bankId = argv[++i];
     else if (a === '--user') { opts.user = argv[++i]; opts.default = false; }
     else if (a === '--not-default') opts.default = false;
+    else if (a === '--update') opts.update = true;
     else if (a === '--dry-run') opts.dryRun = true;
     else if (a === '--print') { opts.dryRun = true; opts.print = argv[++i]; }
     else if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
@@ -441,6 +461,7 @@ async function main() {
     verified: 0,
     needsReview: 0,
     duplicates: 0,
+    updated: 0,
     skipped: 0,
     failures: 0,
     reasons: {},
@@ -476,7 +497,31 @@ async function main() {
     }
     if (opts.print) continue;
     if (r.external_id && seen.has(r.external_id)) {
-      report.duplicates++;
+      // `--update`: refresh the text columns of an already-ingested row so a
+      // change to the HTML→text mapping (e.g. now preserving <u> underlines)
+      // is applied in place. Only the formatting-bearing columns are touched;
+      // correctness, status, position and visuals are left untouched.
+      if (opts.update && !opts.dryRun) {
+        try {
+          await prisma.$executeRawUnsafe(
+            `update public.questions
+                set passage = $2, question_text = $3, options = $4::jsonb, explanation = $5
+              where bank_id = $1::uuid and external_id = $6`,
+            bank.id,
+            r.passage,
+            r.question_text,
+            JSON.stringify(r.options),
+            r.explanation,
+            r.external_id,
+          );
+          report.updated++;
+        } catch (e) {
+          report.failures++;
+          console.log(`  ! update failed for ${r.external_id}: ${e.message}`);
+        }
+      } else {
+        report.duplicates++;
+      }
       continue;
     }
     if (r.external_id) seen.add(r.external_id);
@@ -555,6 +600,7 @@ async function main() {
   console.log(`source questions:        ${report.total}`);
   console.log(`inserted (verified):     ${report.verified}`);
   console.log(`inserted (needs_review): ${report.needsReview}`);
+  if (opts.update) console.log(`updated (existing rows): ${report.updated}`);
   console.log(`skipped (duplicates):    ${report.duplicates}`);
   console.log(`skipped (not ingested):  ${report.skipped}`);
   console.log(`hard failures:           ${report.failures}`);
@@ -579,9 +625,13 @@ async function main() {
   console.log('===========================================================');
 }
 
-main()
-  .catch((e) => {
-    console.error('ingestion failed:', e.message);
-    process.exitCode = 1;
-  })
-  .finally(() => prisma.$disconnect());
+// Only run the CLI when executed directly — importing this module (e.g. from
+// scripts/backfill-formatting.mjs) reuses mapQuestion without ingesting.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main()
+    .catch((e) => {
+      console.error('ingestion failed:', e.message);
+      process.exitCode = 1;
+    })
+    .finally(() => prisma.$disconnect());
+}

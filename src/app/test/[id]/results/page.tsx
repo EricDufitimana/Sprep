@@ -1,7 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTRPC } from '@/trpc/client';
 import { PageHeader } from '@/components/page-header';
 import { Reveal } from '@/components/reveal';
@@ -12,6 +13,8 @@ import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { QuestionMeta, QuestionReview } from '@/components/question-review';
 import { accuracyTone, domainLabel, formatDuration } from '@/lib/labels';
+import { cn } from '@/lib/utils';
+import { DIAGNOSIS_REASONS, type DiagnosisKey } from '@/lib/diagnosis';
 
 export default function ResultsPage() {
   const { id: attemptId } = useParams<{ id: string }>();
@@ -121,10 +124,78 @@ export default function ResultsPage() {
                   visualData: q.visualData,
                 }}
               />
+              {!q.isCorrect && (
+                <DiagnosisPicker
+                  attemptId={attemptId}
+                  questionId={q.questionId}
+                  initial={(q.selfDiagnosis as DiagnosisKey | null) ?? null}
+                />
+              )}
             </CardBody>
           </Card>
         ))}
       </Reveal>
     </>
+  );
+}
+
+/**
+ * "Why did you miss this?" — pick one reason (or none). Selectable rather than
+ * free text so the choices roll up on the Progress page ("How you miss").
+ */
+function DiagnosisPicker({
+  attemptId,
+  questionId,
+  initial,
+}: {
+  attemptId: string;
+  questionId: string;
+  initial: DiagnosisKey | null;
+}) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = useState<DiagnosisKey | null>(initial);
+
+  const save = useMutation(
+    trpc.answers.saveDiagnosis.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries(trpc.progress.analytics.queryFilter());
+      },
+    }),
+  );
+
+  const pick = (key: DiagnosisKey) => {
+    const next = selected === key ? null : key;
+    setSelected(next);
+    save.mutate({ attemptId, questionId, reason: next });
+  };
+
+  return (
+    <div className="mt-4 border-t border-line pt-3">
+      <p className="mb-2 text-micro font-medium uppercase tracking-wide text-ink-400">Why did you miss this?</p>
+      <div className="flex flex-wrap gap-1.5">
+        {DIAGNOSIS_REASONS.map((r) => {
+          const on = selected === r.key;
+          return (
+            <button
+              key={r.key}
+              type="button"
+              onClick={() => pick(r.key)}
+              title={r.hint}
+              aria-pressed={on}
+              className={cn(
+                'rounded-pill border px-3 py-1 text-small transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue',
+                on
+                  ? 'border-blue bg-blue-tint font-medium text-blue'
+                  : 'border-line text-ink-700 hover:border-ink-400/50 hover:text-ink-900',
+              )}
+            >
+              {r.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
