@@ -2,7 +2,11 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, protectedProcedure } from '../init';
 import { fetchAllRows } from '@/utils/paginate';
-import { estimateScaledScore, type Difficulty, type ScoredResponse } from '@/utils/scaled-score';
+import {
+  estimateWeightedScaledScore,
+  type Difficulty,
+  type DomainResponses,
+} from '@/utils/scaled-score';
 import { DSAT_DOMAIN_WEIGHTS, DSAT_MODULE_QUESTIONS } from '@/lib/dsat';
 import { DIAGNOSIS_KEYS } from '@/lib/diagnosis';
 import { COMPLETED_ANSWER_FILTER } from './questions';
@@ -11,6 +15,8 @@ import { COMPLETED_ANSWER_FILTER } from './questions';
 const BUDGET_SECONDS = Math.round((32 * 60) / DSAT_MODULE_QUESTIONS);
 /** Below this, a miss reads as a rush/careless slip rather than a knowledge gap. */
 const CARELESS_SECONDS = 25;
+/** Above this a recorded time is idle/tab-left-open, not real thinking time. */
+const MAX_PLAUSIBLE_MS = 300_000; // 5 minutes
 const DIAGNOSIS_KEY_SET = new Set<string>(DIAGNOSIS_KEYS);
 
 /** One completed answer joined to the little of its question analytics needs. */
@@ -23,6 +29,22 @@ type AnalyticsRow = {
   source: string | null;
   questions: { domain: string | null; skill: string | null; difficulty: Difficulty | null } | null;
 };
+
+/**
+ * Split answer rows into one response bucket per official domain, tagged with
+ * that domain's SAT weight — the input to the domain-balanced scaled score.
+ * `correctOf` lets callers score "as answered" or a hypothetical (e.g. avoidable
+ * misses converted). Rows without a known domain or difficulty are dropped.
+ */
+function toDomainGroups(rows: AnalyticsRow[], correctOf: (r: AnalyticsRow) => boolean): DomainResponses[] {
+  return (Object.keys(DSAT_DOMAIN_WEIGHTS) as (keyof typeof DSAT_DOMAIN_WEIGHTS)[]).map((domain) => ({
+    domain,
+    weight: DSAT_DOMAIN_WEIGHTS[domain],
+    responses: rows
+      .filter((r) => r.questions?.domain === domain && r.questions?.difficulty != null)
+      .map((r) => ({ difficulty: r.questions!.difficulty as Difficulty, isCorrect: correctOf(r) })),
+  }));
+}
 
 /** Group rows by a key, returning correct/total/accuracy, dropping null keys. */
 function groupAccuracy<T>(rows: T[], keyOf: (r: T) => string | null, correctOf: (r: T) => boolean) {
@@ -275,42 +297,42 @@ export const progressRouter = createTRPCRouter({
     const wrong = answered.filter((r) => r.is_correct !== true);
     const withDiff = answered.filter((r) => r.questions?.difficulty != null);
 
-    // ---- Scaled score + "reachable" -------------------------------------
-    const responses: ScoredResponse[] = withDiff.map((r) => ({
-      difficulty: r.questions!.difficulty,
-      isCorrect: r.is_correct === true,
-    }));
-    const estimate = estimateScaledScore(responses);
+    // ---- Domain-balanced scaled score + "reachable" ---------------------
+    // Ability is estimated per domain and combined by each domain's official SAT
+    // share, so an uneven practice mix doesn't skew the section estimate.
+    const estimate = estimateWeightedScaledScore(toDomainGroups(answered, (r) => r.is_correct === true));
 
-    const reachableResponses: ScoredResponse[] = withDiff.map((r) => {
-      const secs = r.time_spent_ms != null ? r.time_spent_ms / 1000 : null;
-      const avoidable =
-        r.is_correct !== true &&
-        (r.questions!.difficulty === 'easy' || (secs != null && secs < CARELESS_SECONDS));
-      return { difficulty: r.questions!.difficulty, isCorrect: r.is_correct === true || avoidable };
-    });
-    const reachable = estimateScaledScore(reachableResponses);
+    const reachable = estimateWeightedScaledScore(
+      toDomainGroups(answered, (r) => {
+        if (r.is_correct === true) return true;
+        const secs = r.time_spent_ms != null ? r.time_spent_ms / 1000 : null;
+        return r.questions!.difficulty === 'easy' || (secs != null && secs < CARELESS_SECONDS);
+      }),
+    );
     const scaledScore = estimate
       ? {
           score: estimate.score,
           low: estimate.low,
           high: estimate.high,
           sampleSize: estimate.sampleSize,
+          domainsCovered: estimate.domainsCovered,
+          domainsTotal: estimate.domainsTotal,
           reachableScore: reachable?.score ?? estimate.score,
           reachableDelta: (reachable?.score ?? estimate.score) - estimate.score,
         }
       : null;
 
     // ---- Per-attempt trend (percent + estimated scaled) -----------------
-    const answersByAttempt = new Map<string, ScoredResponse[]>();
-    for (const r of withDiff) {
+    // Each attempt's scaled score uses the same domain-balanced method.
+    const rowsByAttempt = new Map<string, AnalyticsRow[]>();
+    for (const r of answered) {
       if (!r.attempt_id) continue;
-      const list = answersByAttempt.get(r.attempt_id) ?? [];
-      list.push({ difficulty: r.questions!.difficulty, isCorrect: r.is_correct === true });
-      answersByAttempt.set(r.attempt_id, list);
+      const list = rowsByAttempt.get(r.attempt_id) ?? [];
+      list.push(r);
+      rowsByAttempt.set(r.attempt_id, list);
     }
     const trend = attemptRows.map((a) => {
-      const est = estimateScaledScore(answersByAttempt.get(a.id) ?? []);
+      const est = estimateWeightedScaledScore(toDomainGroups(rowsByAttempt.get(a.id) ?? [], (r) => r.is_correct === true));
       return {
         attemptId: a.id,
         submittedAt: a.submitted_at,
@@ -370,9 +392,12 @@ export const progressRouter = createTRPCRouter({
       .filter((s) => s.total >= 3)
       .sort((a, b) => a.accuracyPercent - b.accuracyPercent);
 
-    // ---- Pacing (timed sittings only) -----------------------------------
+    // ---- Pacing (every timed answer: bank practice + sittings) ----------
+    // Uses the per-question time recorded on ANY answer (question-bank checks
+    // included, not just /practice sittings), dropping implausibly long times
+    // that are really idle/tab-left-open rather than thinking.
     const timed = answered.filter(
-      (r) => r.time_spent_ms != null && r.time_spent_ms > 0 && (r.source === 'test' || r.source === 'module'),
+      (r) => r.time_spent_ms != null && r.time_spent_ms > 0 && r.time_spent_ms <= MAX_PLAUSIBLE_MS,
     );
     let pacing: {
       avgSeconds: number;
@@ -380,6 +405,7 @@ export const progressRouter = createTRPCRouter({
       budgetSeconds: number;
       sampleSize: number;
       buckets: { label: string; correct: number; total: number; accuracyPercent: number }[];
+      byType: { skill: string; avgSeconds: number; count: number; accuracyPercent: number }[];
     } | null = null;
     if (timed.length > 0) {
       const secs = timed.map((r) => r.time_spent_ms! / 1000).sort((a, b) => a - b);
@@ -401,12 +427,34 @@ export const progressRouter = createTRPCRouter({
           accuracyPercent: inBucket.length === 0 ? 0 : Math.round((correct / inBucket.length) * 1000) / 10,
         };
       });
+
+      // Average time per question type (skill) — which types eat the clock.
+      const perSkill = new Map<string, { sum: number; count: number; correct: number }>();
+      for (const r of timed) {
+        const skill = r.questions?.skill;
+        if (!skill) continue;
+        const b = perSkill.get(skill) ?? { sum: 0, count: 0, correct: 0 };
+        b.sum += r.time_spent_ms! / 1000;
+        b.count += 1;
+        if (r.is_correct === true) b.correct += 1;
+        perSkill.set(skill, b);
+      }
+      const byType = Array.from(perSkill.entries())
+        .map(([skill, b]) => ({
+          skill,
+          avgSeconds: Math.round(b.sum / b.count),
+          count: b.count,
+          accuracyPercent: Math.round((b.correct / b.count) * 1000) / 10,
+        }))
+        .sort((a, b) => b.avgSeconds - a.avgSeconds);
+
       pacing = {
         avgSeconds: Math.round(avg),
         medianSeconds: Math.round(median),
         budgetSeconds: BUDGET_SECONDS,
         sampleSize: timed.length,
         buckets,
+        byType,
       };
     }
 

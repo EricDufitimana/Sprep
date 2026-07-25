@@ -2,10 +2,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   estimateScaledScore,
+  estimateWeightedScaledScore,
   thetaToScore,
   SCORE_MIN,
   SCORE_MAX,
   type Difficulty,
+  type DomainResponses,
   type ScoredResponse,
 } from '../scaled-score.ts';
 
@@ -95,5 +97,71 @@ describe('estimateScaledScore', () => {
       assert.ok(est.score >= prev, `score should not decrease as correct rises (${correct})`);
       prev = est.score;
     }
+  });
+});
+
+describe('estimateWeightedScaledScore', () => {
+  const group = (domain: string, weight: number, responses: ScoredResponse[]): DomainResponses => ({
+    domain,
+    weight,
+    responses,
+  });
+
+  it('returns null when no domain has evidence', () => {
+    assert.equal(estimateWeightedScaledScore([group('a', 0.5, []), group('b', 0.5, [])]), null);
+  });
+
+  it('reports how many domains it covered', () => {
+    const est = estimateWeightedScaledScore([
+      group('a', 0.5, batch('medium', 5, 4)),
+      group('b', 0.5, []),
+    ])!;
+    assert.equal(est.domainsCovered, 1);
+    assert.equal(est.domainsTotal, 2);
+    assert.equal(est.perDomain.length, 1);
+  });
+
+  it('is not skewed by a lopsided practice volume', () => {
+    // Two domains, equal official weight. Strong in one, weak in the other, but
+    // with wildly different volumes. The weighted composite should sit between
+    // them (near their average), NOT near the high-volume domain.
+    const strongHighVolume = batch('medium', 100, 95); // ~95% over 100 questions
+    const weakLowVolume = batch('medium', 10, 3); // 30% over 10 questions
+
+    const weighted = estimateWeightedScaledScore([
+      group('strong', 0.5, strongHighVolume),
+      group('weak', 0.5, weakLowVolume),
+    ])!;
+
+    // A naive pooled estimate is dragged toward the 100-question strong domain.
+    const pooled = estimateScaledScore([...strongHighVolume, ...weakLowVolume])!;
+
+    const strongOnly = estimateScaledScore(strongHighVolume)!;
+    const weakOnly = estimateScaledScore(weakLowVolume)!;
+    const midpoint = (strongOnly.score + weakOnly.score) / 2;
+
+    assert.ok(
+      Math.abs(weighted.score - midpoint) < Math.abs(pooled.score - midpoint),
+      `weighted (${weighted.score}) should be nearer the balanced midpoint (${midpoint}) than pooled (${pooled.score})`,
+    );
+    assert.ok(weighted.score < pooled.score, 'de-skewing pulls the composite down from the pooled high-volume value');
+  });
+
+  it('weights domains by their official share, not their volume', () => {
+    // Same responses, only the weights differ → the composite must move toward
+    // the more heavily weighted domain.
+    const strong = batch('medium', 20, 18);
+    const weak = batch('medium', 20, 6);
+
+    const tiltStrong = estimateWeightedScaledScore([
+      group('strong', 0.8, strong),
+      group('weak', 0.2, weak),
+    ])!;
+    const tiltWeak = estimateWeightedScaledScore([
+      group('strong', 0.2, strong),
+      group('weak', 0.8, weak),
+    ])!;
+
+    assert.ok(tiltStrong.score > tiltWeak.score, `${tiltStrong.score} > ${tiltWeak.score}`);
   });
 });

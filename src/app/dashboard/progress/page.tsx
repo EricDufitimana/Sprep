@@ -147,6 +147,15 @@ function ScoreHero({ data, className }: { data: Analytics; className?: string })
                 likely range <span className="font-medium text-ink-700 tabular-nums">{s.low}–{s.high}</span> · from{' '}
                 {s.sampleSize} questions
               </p>
+              <p className="mt-1 text-micro text-ink-400">
+                {s.domainsCovered < s.domainsTotal ? (
+                  <>
+                    balanced across {s.domainsCovered} of {s.domainsTotal} domains — practice the rest to complete it
+                  </>
+                ) : (
+                  <>balanced across all {s.domainsTotal} domains by their SAT weighting</>
+                )}
+              </p>
             </>
           ) : (
             <p className="mt-2 max-w-xs text-body text-ink-500">
@@ -404,6 +413,7 @@ function ErrorCard({ data }: { data: Analytics }) {
 
 function PacingCard({ data }: { data: Analytics }) {
   const p = data.pacing;
+  const slowest = p?.byType[0];
   return (
     <Card className="h-full">
       <CardHeader>
@@ -412,7 +422,7 @@ function PacingCard({ data }: { data: Analytics }) {
       </CardHeader>
       <CardBody className="space-y-4">
         {!p ? (
-          <p className="text-small text-ink-400">Take a timed sitting to see your pacing.</p>
+          <p className="text-small text-ink-400">Answer some questions to see your pace per question.</p>
         ) : (
           <>
             <div className="flex items-end gap-6">
@@ -420,7 +430,7 @@ function PacingCard({ data }: { data: Analytics }) {
                 <p className="text-h1 font-semibold text-ink-900 tabular-nums">
                   {p.avgSeconds}<span className="text-h3 text-ink-500">s</span>
                 </p>
-                <p className="text-micro text-ink-400">avg / question</p>
+                <p className="text-micro text-ink-400">avg / question · {p.sampleSize} timed</p>
               </div>
               <p
                 className={cn(
@@ -431,18 +441,49 @@ function PacingCard({ data }: { data: Analytics }) {
                 {p.avgSeconds <= p.budgetSeconds ? 'within budget' : `${p.avgSeconds - p.budgetSeconds}s over budget`}
               </p>
             </div>
+
+            {/* Accuracy by how long each question took */}
             <div className="space-y-2">
+              <p className="text-micro font-medium uppercase tracking-wide text-ink-400">Accuracy by time spent</p>
               {p.buckets.filter((b) => b.total > 0).map((b) => (
                 <div key={b.label} className="flex items-center gap-3">
                   <span className="w-14 shrink-0 text-micro text-ink-500 tabular-nums">{b.label}</span>
                   <ProgressBar value={b.accuracyPercent} tone={accuracyTone(b.accuracyPercent)} className="flex-1" />
-                  <span className="w-14 shrink-0 text-right text-micro text-ink-400 tabular-nums">
+                  <span className="w-16 shrink-0 text-right text-micro text-ink-400 tabular-nums">
                     {b.accuracyPercent}% · {b.total}
                   </span>
                 </div>
               ))}
             </div>
-            <p className="text-micro text-ink-500">Accuracy by time spent — a dip in the fast row means rushing.</p>
+
+            {/* Average time by question type — what eats the clock */}
+            {p.byType.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-micro font-medium uppercase tracking-wide text-ink-400">
+                  Avg time by question type
+                </p>
+                {p.byType.slice(0, 6).map((t) => (
+                  <div key={t.skill} className="flex items-baseline justify-between gap-3">
+                    <span className="min-w-0 flex-1 truncate text-small text-ink-700">{t.skill}</span>
+                    <span
+                      className={cn(
+                        'shrink-0 text-small font-medium tabular-nums',
+                        t.avgSeconds > p.budgetSeconds ? 'text-amber' : 'text-ink-900',
+                      )}
+                    >
+                      {t.avgSeconds}s
+                    </span>
+                    <span className="w-8 shrink-0 text-right text-micro text-ink-400 tabular-nums">{t.count}</span>
+                  </div>
+                ))}
+                {slowest && slowest.avgSeconds > p.budgetSeconds && (
+                  <p className="pt-1 text-micro text-ink-500">
+                    <span className="font-medium text-ink-700">{slowest.skill}</span> eats the most time
+                    ({slowest.avgSeconds}s avg) — drill it to speed up.
+                  </p>
+                )}
+              </div>
+            )}
           </>
         )}
       </CardBody>

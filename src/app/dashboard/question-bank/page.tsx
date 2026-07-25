@@ -535,25 +535,36 @@ function Taker({
       const cur = s[q.id] ?? EMPTY_STATE;
       return { ...s, [q.id]: { ...cur, selected: cur.selected === letter ? null : letter } };
     });
+    // Prefetch the answer the moment a pick is committed, so "Check" is instant.
+    // Fetching only after a selection keeps a set from being mined without an attempt.
+    void queryClient.prefetchQuery(trpc.questions.reveal.queryOptions({ questionId: q.id }));
   };
 
-  const doCheck = () => {
-    if (st.result || check.isPending || !st.selected) return; // an answer is required
+  const doCheck = async () => {
+    if (st.result || !st.selected) return; // an answer is required
     const elapsed = st.timeMs + (Date.now() - startedAtRef.current);
     // Option letters come from the DB as plain strings; the API narrows to the
     // answer-letter union, and the taker only ever sets a real option letter.
     const selected = (st.selected ?? undefined) as 'A' | 'B' | 'C' | 'D' | undefined;
-    check.mutate(
-      { questionId: q.id, selectedAnswer: selected, timeSpentMs: elapsed },
-      {
-        onSuccess: (res) => {
-          setStates((s) => ({
-            ...s,
-            [q.id]: { ...(s[q.id] ?? EMPTY_STATE), timeMs: elapsed, result: res },
-          }));
-        },
-      },
+
+    // Reveal from the prefetched cache — instant when the answer is already in
+    // (prefetched on select); otherwise this awaits the in-flight fetch.
+    const revealed = await queryClient.ensureQueryData(
+      trpc.questions.reveal.queryOptions({ questionId: q.id }),
     );
+    const isCorrect = selected !== undefined ? selected === revealed.correctAnswer : null;
+    setStates((s) => ({
+      ...s,
+      [q.id]: {
+        ...(s[q.id] ?? EMPTY_STATE),
+        timeMs: elapsed,
+        result: { correctAnswer: revealed.correctAnswer, explanation: revealed.explanation, isCorrect },
+      },
+    }));
+
+    // Persist the attempt in the background — grading is re-done server-side, so
+    // the record is authoritative even though the UI already moved on.
+    check.mutate({ questionId: q.id, selectedAnswer: selected, timeSpentMs: elapsed });
   };
 
   const isLast = index === questions.length - 1;
@@ -773,10 +784,10 @@ function Taker({
               <div className="mt-5 flex items-center gap-3">
                 <button
                   onClick={doCheck}
-                  disabled={!st.selected || check.isPending}
+                  disabled={!st.selected}
                   className="rounded-full border border-[#2C46AD] bg-[#3B5BDB] px-6 py-2 text-[13px] font-semibold text-white shadow-[0_3px_0_#2C46AD] transition-[transform,box-shadow] hover:-translate-y-px hover:shadow-[0_4px_0_#2C46AD] active:translate-y-[3px] active:shadow-none disabled:cursor-not-allowed disabled:border-[#DED7C9] disabled:bg-[#E9E4D8] disabled:text-[#9A9280] disabled:shadow-none disabled:hover:translate-y-0"
                 >
-                  {check.isPending ? 'Checking…' : 'Check answer'}
+                  Check answer
                 </button>
                 {!st.selected && (
                   <span className="text-[12px] text-[#B0A891]">Choose an answer first</span>

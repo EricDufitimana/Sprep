@@ -103,7 +103,7 @@ function safeCodePoint(n) {
  * into the stored text and is interpreted by the <RichText> renderer. Every
  * other tag (spans, block wrappers, figures, …) is still removed.
  * ------------------------------------------------------------------ */
-const INLINE_KEEP = new Set(['u', 'em', 'strong', 'sub', 'sup']);
+const INLINE_KEEP = new Set(['u', 'em', 'i', 'strong', 'b', 'sub', 'sup']);
 function stripTagsKeepInline(s) {
   return s.replace(/<(\/?)([a-zA-Z0-9]+)(?:\s[^>]*)?\/?>/g, (_, slash, name) => {
     const tag = name.toLowerCase();
@@ -142,6 +142,8 @@ function htmlToText(html) {
   let s = stripVisualBlocks(html);
   s = s.replace(/<span[^>]*class="sr-only"[^>]*>[\s\S]*?<\/span>/gi, '');
   s = s.replace(/<br\s*\/?>/gi, '\n');
+  // Turn list items into bulleted lines that survive the strip to plain text.
+  s = s.replace(/<li[^>]*>/gi, '\n• ');
   s = s.replace(/<\/(p|div|li|tr|h[1-6]|figcaption|caption|blockquote)>/gi, '\n');
   s = stripTagsKeepInline(s);
   s = decodeEntities(s);

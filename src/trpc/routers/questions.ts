@@ -379,16 +379,40 @@ export const questionsRouter = createTRPCRouter({
     }),
 
   /**
-   * Check one question's answer in the untimed question-bank taker: grade the
-   * user's selected choice, hand back the correct answer + explanation, and
-   * record the attempt in the unified `answers` table (`source: 'bank'`,
-   * `attempt_id: null`) with its correctness and per-question time. This is the
-   * single place the taker gets answers, so a set still can't be mined ahead of
-   * a genuine attempt, and the record feeds the same analytics as timed tests.
+   * Hand back one question's correct answer + explanation for the untimed
+   * taker — read-only, records nothing. The taker prefetches this the moment a
+   * choice is selected, so "Check" reveals instantly without waiting on a write.
    *
-   * `selectedAnswer` is optional so a user could reveal without a pick (recorded
-   * with `is_correct: null`), though the taker requires a selection first.
-   * `timeSpentMs` is the count-up timer's value for this question, used for pace.
+   * ═══ Reveal site ═══
+   * Together with `buildCustomSet` (which ships no answers) this keeps a set from
+   * being mined in bulk: the client fetches an answer only per question, and the
+   * taker only calls it once the user has committed to a pick. The attempt is
+   * still recorded separately by `check`.
+   */
+  reveal: protectedProcedure
+    .input(z.object({ questionId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const { data: q, error } = await ctx.supabase
+        .from('questions')
+        .select('correct_answer, explanation')
+        .eq('id', input.questionId)
+        .single();
+      if (error || !q) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Question not found' });
+      }
+      return { correctAnswer: q.correct_answer, explanation: q.explanation };
+    }),
+
+  /**
+   * Record one question's attempt in the untimed question-bank taker: grade the
+   * user's selected choice server-side and write it to the unified `answers`
+   * table (`source: 'bank'`, `attempt_id: null`) with its correctness and
+   * per-question time, feeding the same analytics as timed tests. The correct
+   * answer/explanation for the UI come from `reveal`; this call is fire-and-forget
+   * from the taker's perspective, so recording never blocks the reveal.
+   *
+   * `selectedAnswer` is optional so a user could record without a pick (stored
+   * with `is_correct: null`). `timeSpentMs` is the per-question count-up timer.
    */
   check: protectedProcedure
     .input(

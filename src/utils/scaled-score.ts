@@ -68,21 +68,23 @@ export function thetaToScore(theta: number): number {
   return Math.round(clamped / 10) * 10;
 }
 
-/**
- * MAP Rasch ability estimate via Newton–Raphson. Only responses with a known
- * difficulty contribute. The N(0, PRIOR_SD²) prior both handles all-correct /
- * all-incorrect sets (which have no finite MLE) and shrinks small samples toward
- * the mean, so a few lucky answers don't read as 800. Returns null when there is
- * no usable evidence.
- */
-export function estimateScaledScore(responses: ScoredResponse[]): ScaledScoreEstimate | null {
+function toItems(responses: ScoredResponse[]): { b: number; x: number }[] {
   const items: { b: number; x: number }[] = [];
   for (const r of responses) {
     if (r.difficulty === null) continue;
     items.push({ b: DIFFICULTY_B[r.difficulty], x: r.isCorrect ? 1 : 0 });
   }
-  if (items.length === 0) return null;
+  return items;
+}
 
+/**
+ * MAP Rasch ability estimate via Newton–Raphson. The N(0, PRIOR_SD²) prior both
+ * handles all-correct / all-incorrect sets (which have no finite MLE) and shrinks
+ * small samples toward the mean, so a few lucky answers don't read as 800.
+ * Returns the ability (logits) and the observed Fisher information at it (the
+ * inverse of the estimate's variance). With no items it returns the prior alone.
+ */
+function estimateAbility(items: { b: number; x: number }[]): { theta: number; info: number } {
   let theta = PRIOR_MEAN;
   for (let iter = 0; iter < 50; iter++) {
     let grad = -(theta - PRIOR_MEAN) * PRIOR_INFO; // prior contribution
@@ -96,15 +98,25 @@ export function estimateScaledScore(responses: ScoredResponse[]): ScaledScoreEst
     theta += step;
     if (Math.abs(step) < 1e-7) break;
   }
-
-  // Standard error from the observed Fisher information at the estimate (logits).
   let info = PRIOR_INFO;
   for (const it of items) {
     const p = sigmoid(theta - it.b);
     info += p * (1 - p);
   }
-  const standardError = 1 / Math.sqrt(info);
+  return { theta, info };
+}
 
+/**
+ * Estimated scaled score from a flat pool of responses (all domains treated
+ * equally). Returns null when there is no usable evidence. Prefer
+ * `estimateWeightedScaledScore` for a section score — the digital SAT balances
+ * domains, so a pooled estimate skews toward whatever you happened to practice.
+ */
+export function estimateScaledScore(responses: ScoredResponse[]): ScaledScoreEstimate | null {
+  const items = toItems(responses);
+  if (items.length === 0) return null;
+  const { theta, info } = estimateAbility(items);
+  const standardError = 1 / Math.sqrt(info);
   return {
     score: thetaToScore(theta),
     low: thetaToScore(theta - 1.96 * standardError),
@@ -112,5 +124,70 @@ export function estimateScaledScore(responses: ScoredResponse[]): ScaledScoreEst
     theta,
     standardError,
     sampleSize: items.length,
+  };
+}
+
+export interface DomainResponses {
+  domain: string;
+  /** Official SAT share of this domain (need not be pre-normalized). */
+  weight: number;
+  responses: ScoredResponse[];
+}
+
+export interface WeightedScaledScoreEstimate extends ScaledScoreEstimate {
+  /** Domains with at least one usable response / total domains supplied. */
+  domainsCovered: number;
+  domainsTotal: number;
+  /** Per-domain breakdown so the UI can show what fed the composite. */
+  perDomain: { domain: string; score: number; weight: number; sampleSize: number }[];
+}
+
+/**
+ * Estimated R&W section score that mirrors the SAT's domain balance: ability is
+ * estimated separately within each domain, then combined as a weighted average
+ * of the per-domain abilities using each domain's official share. This stops the
+ * score from being lopsided when practice is uneven — 200 questions of
+ * Information & Ideas and none of Conventions no longer reads as a full section
+ * score of one domain's strength.
+ *
+ * Only domains that have responses contribute; their weights are renormalized to
+ * sum to 1, so the composite is always a proper section-style average of what
+ * has been practiced. `domainsCovered` lets the UI flag partial coverage. The
+ * band combines the per-domain variances (Var(Σ wᵢθᵢ) = Σ wᵢ²·Var(θᵢ)), so it
+ * widens when a heavily-weighted domain has thin data. Returns null with no
+ * usable evidence in any domain.
+ */
+export function estimateWeightedScaledScore(groups: DomainResponses[]): WeightedScaledScoreEstimate | null {
+  const present = groups
+    .map((g) => ({ domain: g.domain, weight: g.weight, items: toItems(g.responses) }))
+    .filter((g) => g.items.length > 0);
+  if (present.length === 0) return null;
+
+  const totalWeight = present.reduce((s, g) => s + g.weight, 0);
+  let theta = 0;
+  let variance = 0;
+  let sampleSize = 0;
+  const perDomain: WeightedScaledScoreEstimate['perDomain'] = [];
+
+  for (const g of present) {
+    const { theta: t, info } = estimateAbility(g.items);
+    const w = g.weight / totalWeight; // renormalized official share
+    theta += w * t;
+    variance += w * w * (1 / info);
+    sampleSize += g.items.length;
+    perDomain.push({ domain: g.domain, score: thetaToScore(t), weight: w, sampleSize: g.items.length });
+  }
+
+  const standardError = Math.sqrt(variance);
+  return {
+    score: thetaToScore(theta),
+    low: thetaToScore(theta - 1.96 * standardError),
+    high: thetaToScore(theta + 1.96 * standardError),
+    theta,
+    standardError,
+    sampleSize,
+    domainsCovered: present.length,
+    domainsTotal: groups.length,
+    perDomain,
   };
 }
