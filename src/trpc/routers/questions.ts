@@ -234,6 +234,8 @@ export const questionsRouter = createTRPCRouter({
         .object({
           difficulty: z.array(questionDifficultySchema).optional(),
           excludeCompleted: z.boolean().default(false),
+          /** Drop questions still live in Bluebook (active = true). */
+          excludeActive: z.boolean().default(false),
         })
         .optional(),
     )
@@ -245,19 +247,26 @@ export const questionsRouter = createTRPCRouter({
       const makeQuery = (from: number, to: number) => {
         let q = supabase
           .from('questions')
-          .select('id, domain, skill')
+          .select('id, domain, skill, active')
           .eq('extraction_status', 'verified')
           .order('id', { ascending: true });
         if (input?.difficulty?.length) q = q.in('difficulty', input.difficulty);
         return q.range(from, to);
       };
 
-      let rows: { id: string; domain: string | null; skill: string | null }[];
+      let rows: { id: string; domain: string | null; skill: string | null; active: boolean | null }[];
       try {
         rows = await fetchAllRows(makeQuery);
       } catch (error) {
         console.error('❌ [questions.domainCounts] Query failed:', error);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not load counts' });
+      }
+
+      // Exclude everything except explicitly-disclosed official questions:
+      // keep active === false, drop active === true (live in Bluebook) AND
+      // active === null (questions from other banks, which have no CB status).
+      if (input?.excludeActive) {
+        rows = rows.filter((r) => r.active === false);
       }
 
       if (input?.excludeCompleted) {
@@ -305,6 +314,8 @@ export const questionsRouter = createTRPCRouter({
         difficulty: z.array(questionDifficultySchema).optional(),
         count: z.number().int().min(1).max(100),
         excludeCompleted: z.boolean().default(false),
+        /** Drop questions still live in Bluebook (active = true). */
+        excludeActive: z.boolean().default(false),
         /** 'random' shuffles the draw; 'in_order' keeps question position order. */
         order: z.enum(['random', 'in_order']).default('random'),
       }),
@@ -317,7 +328,7 @@ export const questionsRouter = createTRPCRouter({
       const makeIdQuery = (from: number, to: number) => {
         let q = supabase
           .from('questions')
-          .select('id, position')
+          .select('id, position, active')
           .eq('extraction_status', 'verified')
           .order('id', { ascending: true });
         // Skills are the narrower scope; when present they already imply a domain.
@@ -327,12 +338,18 @@ export const questionsRouter = createTRPCRouter({
         return q.range(from, to);
       };
 
-      let pool: { id: string; position: number | null }[];
+      let pool: { id: string; position: number | null; active: boolean | null }[];
       try {
-        pool = await fetchAllRows<{ id: string; position: number | null }>(makeIdQuery);
+        pool = await fetchAllRows<{ id: string; position: number | null; active: boolean | null }>(makeIdQuery);
       } catch (error) {
         console.error('❌ [questions.buildCustomSet] Query failed:', error);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not build the set' });
+      }
+
+      // Keep only explicitly-disclosed official questions: drop active === true
+      // (live in Bluebook) and active === null (questions from other banks).
+      if (input.excludeActive) {
+        pool = pool.filter((r) => r.active === false);
       }
 
       if (input.excludeCompleted) {

@@ -68,12 +68,30 @@ interface BuiltQuestion {
   difficulty: string | null;
 }
 
+const EXCLUDE_ACTIVE_KEY = 'qb:excludeActive';
+
 export default function QuestionBankPage() {
   const trpc = useTRPC();
 
-  // Base counts (unfiltered) drive the drill-down; the customize step layers
-  // difficulty/exclusion on top and reports the resulting pool size.
-  const counts = useQuery(trpc.questions.domainCounts.queryOptions({}));
+  // "Exclude active Bluebook questions" — a sticky, page-wide preference. It
+  // recomputes every section count and is carried into every set the user
+  // builds, so once it's on they never practice a live question by accident.
+  const [excludeActive, setExcludeActiveState] = useState(false);
+  useEffect(() => {
+    setExcludeActiveState(localStorage.getItem(EXCLUDE_ACTIVE_KEY) === '1');
+  }, []);
+  const setExcludeActive = (v: boolean) => {
+    setExcludeActiveState(v);
+    try {
+      localStorage.setItem(EXCLUDE_ACTIVE_KEY, v ? '1' : '0');
+    } catch {
+      /* private mode / storage disabled — the toggle still works for the session */
+    }
+  };
+
+  // Counts drive the drill-down and recompute whenever the toggle flips; the
+  // customize step layers difficulty/exclusion on top and reports the pool size.
+  const counts = useQuery(trpc.questions.domainCounts.queryOptions({ excludeActive }));
 
   const [domain, setDomain] = useState<string | null>(null); // null = Level 1
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
@@ -107,6 +125,8 @@ export default function QuestionBankPage() {
             title="Question Bank"
             description="Browse by domain and skill, then build a custom, untimed set — the answer on demand after each question."
           />
+
+          <ExcludeActiveToggle value={excludeActive} onChange={setExcludeActive} />
 
           {counts.isLoading ? (
             <div className="grid gap-4 sm:grid-cols-2">
@@ -155,7 +175,7 @@ export default function QuestionBankPage() {
               </Reveal>
 
               {/* Distinct top-level "mix everything" option. */}
-              <Card className="mt-4 border-blue/25 bg-blue-wash">
+              <Card className="mt-4 border-blue/10 bg-blue-wash">
                 <CardBody className="flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <h3 className="text-h3 font-semibold text-ink-900">Randomize across everything</h3>
@@ -251,6 +271,7 @@ export default function QuestionBankPage() {
       <CustomizeModal
         scope={customize}
         scopeLabel={customize ? scopeLabel(customize) : ''}
+        excludeActive={excludeActive}
         onClose={() => setCustomize(null)}
         onBuilt={(questions, label) => {
           setSession({ questions, label });
@@ -261,16 +282,73 @@ export default function QuestionBankPage() {
   );
 }
 
+/* ── Exclude-active toggle ───────────────────────────────────────────────── */
+
+/**
+ * The page-wide switch for hiding questions still live in Bluebook. A slim,
+ * single-line bar — noticeable via a status dot + a soft green wash when on, but
+ * far quieter than a full card. Its state is persisted and fed into every count
+ * and every built set.
+ */
+function ExcludeActiveToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={value}
+      aria-label="Exclude active Bluebook questions"
+      onClick={() => onChange(!value)}
+      className={cn(
+        'group mb-6 flex w-full items-center justify-between gap-4 rounded-control border px-4 py-2.5 text-left transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue',
+        value ? 'border-green/10 bg-green-tint/50' : 'border-line bg-surface hover:border-ink-400/40',
+      )}
+    >
+      <span className="flex min-w-0 items-center gap-2.5">
+        <span
+          className={cn(
+            'h-2 w-2 shrink-0 rounded-full transition-colors',
+            value ? 'bg-green' : 'bg-ink-400/60',
+          )}
+        />
+        <span className="flex flex-wrap items-baseline gap-x-2">
+          <span className="text-small font-medium text-ink-900">Exclude active Bluebook questions</span>
+          <span className="text-micro text-ink-500">
+            {value ? 'On — showing only disclosed questions' : 'Hide questions still live in the practice tests in the official app'}
+          </span>
+        </span>
+      </span>
+
+      {/* Visual switch (the whole bar is the control) */}
+      <span
+        className={cn(
+          'relative inline-flex h-6 w-11 shrink-0 items-center rounded-pill transition-colors',
+          value ? 'bg-green' : 'bg-ink-400/50 group-hover:bg-ink-400/70',
+        )}
+      >
+        <span
+          className={cn(
+            'inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform',
+            value ? 'translate-x-[22px]' : 'translate-x-0.5',
+          )}
+        />
+      </span>
+    </button>
+  );
+}
+
 /* ── Customize modal ─────────────────────────────────────────────────────── */
 
 function CustomizeModal({
   scope,
   scopeLabel,
+  excludeActive,
   onClose,
   onBuilt,
 }: {
   scope: Scope | null;
   scopeLabel: string;
+  excludeActive: boolean;
   onClose: () => void;
   onBuilt: (questions: BuiltQuestion[], label: string) => void;
 }) {
@@ -298,6 +376,7 @@ function CustomizeModal({
       count,
       difficulty: diff.length ? diff : undefined,
       excludeCompleted,
+      excludeActive,
       order,
     };
     if (scope.kind === 'all') build.mutate(base);
@@ -413,6 +492,15 @@ function CustomizeModal({
             </span>
           </span>
         </label>
+
+        {/* Active-question exclusion is a page-wide setting; this just confirms
+            it's being applied to the set the user is about to build. */}
+        {excludeActive && (
+          <p className="flex items-center gap-2 rounded-control bg-green-tint px-3 py-2.5 text-small text-green">
+            <Icon name="checkmark-circle" className="shrink-0 text-body" />
+            Active Bluebook questions are excluded from this set.
+          </p>
+        )}
 
         {error && (
           <p role="alert" className="rounded-control bg-miss-tint px-3 py-2 text-small text-miss">

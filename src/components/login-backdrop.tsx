@@ -176,14 +176,16 @@ export function LoginBackdrop() {
 
       // Two floors so the pills split between the copy and the panel floor:
       //   • `ground` spans the full width at the base of the panel
-      //   • `shelf` is a narrow platform pinned to the top edge of the centred
-      //     headline, only as wide as the copy — pills that drop over it pile on
-      //     the headline, while pills to either side slip past and hit the floor.
+      //   • `shelf` is a narrow platform pinned right onto the centred headline,
+      //     only as wide as the copy — pills that drop over it land directly on
+      //     the text, while pills to either side slip past and hit the floor.
       // The shelf is capped well under the panel width so there are always clear
       // side lanes down to the floor, on any screen size.
+      // The small +4 sinks the shelf into the line-box padding above the glyphs
+      // so pills rest against the letters themselves, with no visible gap.
       const h2 = headlineRef.current;
       const h2Rect = h2 ? h2.getBoundingClientRect() : null;
-      const shelfY = h2Rect ? Math.round(h2Rect.top - rect.top) - 14 : Math.round(H * 0.5);
+      const shelfY = h2Rect ? Math.round(h2Rect.top - rect.top) + 4 : Math.round(H * 0.5);
       const shelfW = Math.min(
         h2Rect ? Math.round(h2Rect.width) + 24 : Math.round(W * 0.5),
         Math.round(W * 0.6),

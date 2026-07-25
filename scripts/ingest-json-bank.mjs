@@ -355,6 +355,9 @@ export function mapQuestion(src) {
       has_visual: visual.hasVisual,
       visual_data: visual.visualData,
       extraction_status: status,
+      // Whether the question is still "active" in College Board's live Bluebook
+      // (true) vs. disclosed/retired (false). Null when the source omits it.
+      active: typeof src.active === 'boolean' ? src.active : null,
     },
     status,
     reasons,
@@ -507,7 +510,7 @@ async function main() {
         try {
           await prisma.$executeRawUnsafe(
             `update public.questions
-                set passage = $2, question_text = $3, options = $4::jsonb, explanation = $5
+                set passage = $2, question_text = $3, options = $4::jsonb, explanation = $5, active = $7
               where bank_id = $1::uuid and external_id = $6`,
             bank.id,
             r.passage,
@@ -515,6 +518,7 @@ async function main() {
             JSON.stringify(r.options),
             r.explanation,
             r.external_id,
+            r.active,
           );
           report.updated++;
         } catch (e) {
@@ -536,9 +540,9 @@ async function main() {
           `insert into public.questions
              (bank_id, user_id, external_id, position, domain, skill, difficulty,
               passage, question_text, options, correct_answer, explanation,
-              has_visual, visual_data, extraction_status, is_default, visual_url)
+              has_visual, visual_data, extraction_status, is_default, visual_url, active)
            values ($1::uuid, $2::uuid, $3, $4, $5::question_domain, $6, $7::question_difficulty,
-                   $8, $9, $10::jsonb, $11, $12, $13, $14, $15::extraction_status, $16, null)`,
+                   $8, $9, $10::jsonb, $11, $12, $13, $14, $15::extraction_status, $16, null, $17)`,
           bank.id,
           opts.default ? null : opts.user,
           r.external_id,
@@ -555,6 +559,7 @@ async function main() {
           r.visual_data,
           r.extraction_status,
           opts.default,
+          r.active,
         );
       } catch (e) {
         report.failures++;

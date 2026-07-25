@@ -69,8 +69,11 @@ async function main() {
       continue;
     }
     const r = mapped.row;
-    rows.push([r.external_id, r.passage, r.question_text, JSON.stringify(r.options), r.explanation]);
+    rows.push([r.external_id, r.passage, r.question_text, JSON.stringify(r.options), r.explanation, r.active]);
   }
+
+  // Ensure the `active` column exists (Bluebook live vs. disclosed). Idempotent.
+  await prisma.$executeRawUnsafe(`alter table public.questions add column if not exists active boolean`);
 
   let updated = 0;
   for (let i = 0; i < rows.length; i += CHUNK) {
@@ -80,6 +83,7 @@ async function main() {
     const texts = chunk.map((r) => r[2]);
     const options = chunk.map((r) => r[3]);
     const expls = chunk.map((r) => r[4]);
+    const actives = chunk.map((r) => r[5]);
     // One statement per chunk: unnest the parallel arrays into a virtual table
     // and join it to the target rows by external_id within this bank.
     const affected = await prisma.$executeRawUnsafe(
@@ -87,11 +91,12 @@ async function main() {
           set passage = v.passage,
               question_text = v.question_text,
               options = v.options::jsonb,
-              explanation = v.explanation
+              explanation = v.explanation,
+              active = v.active
          from (
            select * from unnest(
-             $2::text[], $3::text[], $4::text[], $5::text[], $6::text[]
-           ) as t(external_id, passage, question_text, options, explanation)
+             $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::boolean[]
+           ) as t(external_id, passage, question_text, options, explanation, active)
          ) v
         where q.bank_id = $1::uuid and q.external_id = v.external_id`,
       bankId,
@@ -100,6 +105,7 @@ async function main() {
       texts,
       options,
       expls,
+      actives,
     );
     updated += affected;
     console.log(`  chunk ${i / CHUNK + 1}: ${affected} rows updated`);
