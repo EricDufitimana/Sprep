@@ -67,8 +67,9 @@ export function AppSidebar() {
     <Sidebar open={open} setOpen={setOpen}>
       <SidebarBody className={cn('justify-between gap-6', railPad)}>
         <div className="flex flex-1 flex-col overflow-y-auto overflow-x-hidden">
-          {/* Wordmark — collapses to just the mark */}
-          <div className="flex items-center gap-2 py-1">
+          {/* Wordmark — collapses to just the mark. Shares the nav rows' layout
+              so the mark lines up with the nav icons at every collapse state. */}
+          <div className={cn('flex items-center gap-2 py-1', rowLayout)}>
             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-blue text-white">
               <Icon name="bolt" className="text-small" />
             </span>

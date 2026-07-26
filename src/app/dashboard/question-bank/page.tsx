@@ -9,6 +9,7 @@ import { RichText } from '@/components/rich-text';
 import { Button } from '@/components/ui/button';
 import { Card, CardBody } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
+import { LoadingDots } from '@/components/ui/loading-dots';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { QuestionFigure } from '@/components/question-figure';
@@ -542,6 +543,9 @@ function Taker({
   const [states, setStates] = useState<Record<string, QState>>({});
   const [navOpen, setNavOpen] = useState(false);
   const [finished, setFinished] = useState(false);
+  // Optimistic "checking" flag: flips true the instant Check is clicked so the
+  // button shows a loading indication even when the reveal resolves quickly.
+  const [checking, setChecking] = useState(false);
 
   // Difficulty stays hidden until revealed from the "More" menu (like /tester).
   const [showDifficulty, setShowDifficulty] = useState(false);
@@ -629,7 +633,8 @@ function Taker({
   };
 
   const doCheck = async () => {
-    if (st.result || !st.selected) return; // an answer is required
+    if (st.result || !st.selected || checking) return; // an answer is required
+    setChecking(true); // optimistic: show the loading indication right away
     const elapsed = st.timeMs + (Date.now() - startedAtRef.current);
     // Option letters come from the DB as plain strings; the API narrows to the
     // answer-letter union, and the taker only ever sets a real option letter.
@@ -637,9 +642,9 @@ function Taker({
 
     // Reveal from the prefetched cache — instant when the answer is already in
     // (prefetched on select); otherwise this awaits the in-flight fetch.
-    const revealed = await queryClient.ensureQueryData(
-      trpc.questions.reveal.queryOptions({ questionId: q.id }),
-    );
+    const revealed = await queryClient
+      .ensureQueryData(trpc.questions.reveal.queryOptions({ questionId: q.id }))
+      .finally(() => setChecking(false));
     const isCorrect = selected !== undefined ? selected === revealed.correctAnswer : null;
     setStates((s) => ({
       ...s,
@@ -875,7 +880,14 @@ function Taker({
                   disabled={!st.selected}
                   className="rounded-full border border-[#2C46AD] bg-[#3B5BDB] px-6 py-2 text-[13px] font-semibold text-white shadow-[0_3px_0_#2C46AD] transition-[transform,box-shadow] hover:-translate-y-px hover:shadow-[0_4px_0_#2C46AD] active:translate-y-[3px] active:shadow-none disabled:cursor-not-allowed disabled:border-[#DED7C9] disabled:bg-[#E9E4D8] disabled:text-[#9A9280] disabled:shadow-none disabled:hover:translate-y-0"
                 >
-                  Check answer
+                  {checking ? (
+                    <span className="flex items-center gap-1">
+                      Checking
+                      <LoadingDots />
+                    </span>
+                  ) : (
+                    'Check answer'
+                  )}
                 </button>
                 {!st.selected && (
                   <span className="text-[12px] text-[#B0A891]">Choose an answer first</span>
