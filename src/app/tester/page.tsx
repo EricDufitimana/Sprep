@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { RichText } from '@/components/rich-text';
 
 /**
  * /tester — a design sandbox for the test-taking surface.
@@ -48,7 +49,7 @@ const SAMPLE = {
   number: 7,
   total: 27,
   passage:
-    "One recognized social norm of gift giving is that the time spent obtaining a gift will be viewed as a reflection of the gift’s thoughtfulness. Marketing experts Farnoush Reshadi, Julian Givi, and Gopal Das addressed this view in their studies of norms specifically surrounding the giving of gift cards, noting that while recipients tend to view digital gift cards (which can be purchased online from anywhere and often can be redeemed online as well) as superior to physical gift cards (which sometimes must be purchased in person and may only be redeemable in person) in terms of usage, 94.8 percent of participants surveyed indicated that it is more socially acceptable to give a physical gift card to a recipient. This finding suggests that ______",
+    "One recognized social norm of gift giving is that <u>the time spent obtaining a gift will be viewed as a reflection of the gift’s thoughtfulness</u>. Marketing experts Farnoush Reshadi, Julian Givi, and Gopal Das addressed this view in their studies of norms specifically surrounding the giving of gift cards, noting that while recipients tend to view digital gift cards (which can be purchased online from anywhere and often can be redeemed online as well) as superior to physical gift cards (which sometimes must be purchased in person and may only be redeemable in person) in terms of usage, 94.8 percent of participants surveyed indicated that it is more socially acceptable to give a physical gift card to a recipient. This finding suggests that ______",
   question: 'Which choice most logically completes the text?',
   options: [
     { letter: 'A', text: 'gift givers likely overestimate the amount of effort required to use digital gift cards and thus mistakenly assume gift recipients will view them as less desirable than physical gift cards.' },
@@ -241,7 +242,7 @@ export default function TesterPage() {
                       letterSpacing: 'var(--rtrack)',
                     }}
                   >
-                    {SAMPLE.passage}
+                    <RichText>{SAMPLE.passage}</RichText>
                   </p>
                 </div>
               </div>
@@ -289,7 +290,7 @@ export default function TesterPage() {
                     letterSpacing: 'var(--rtrack)',
                   }}
                 >
-                  {SAMPLE.question}
+                  <RichText>{SAMPLE.question}</RichText>
                 </p>
 
                 {/* Options */}
@@ -328,7 +329,7 @@ export default function TesterPage() {
                             letterSpacing: 'var(--rtrack)',
                           }}
                         >
-                          {opt.text}
+                          <RichText>{opt.text}</RichText>
                         </span>
                       </button>
                     );
