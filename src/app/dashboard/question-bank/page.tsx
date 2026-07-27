@@ -35,11 +35,11 @@ const DOMAIN_ORDER = [
   'standard_english_conventions',
 ] as const;
 
-const DOMAIN_TONES: Record<string, { bg: string; ring: string }> = {
-  information_and_ideas: { bg: 'bg-amber-tint', ring: 'text-amber' },
-  craft_and_structure: { bg: 'bg-violet-tint', ring: 'text-violet' },
-  expression_of_ideas: { bg: 'bg-green-tint', ring: 'text-green' },
-  standard_english_conventions: { bg: 'bg-blue-tint', ring: 'text-blue' },
+const DOMAIN_TONES: Record<string, { bg: string; ring: string; accent: string }> = {
+  information_and_ideas: { bg: 'bg-amber-tint', ring: 'text-amber', accent: 'bg-amber' },
+  craft_and_structure: { bg: 'bg-violet-tint', ring: 'text-violet', accent: 'bg-violet' },
+  expression_of_ideas: { bg: 'bg-green-tint', ring: 'text-green', accent: 'bg-green' },
+  standard_english_conventions: { bg: 'bg-blue-tint', ring: 'text-blue', accent: 'bg-blue' },
 };
 
 type Difficulty = 'easy' | 'medium' | 'hard';
@@ -94,6 +94,25 @@ export default function QuestionBankPage() {
   // customize step layers difficulty/exclusion on top and reports the pool size.
   const counts = useQuery(trpc.questions.domainCounts.queryOptions({ excludeActive }));
 
+  // The same counts, but of only the questions the user hasn't done yet. Diffing
+  // the two gives a subtle "how much is left in this category" indicator without
+  // any new backend work — `excludeCompleted` reuses the exact set-builder logic,
+  // so the number shown is what a fresh set would actually draw from.
+  const remaining = useQuery(
+    trpc.questions.domainCounts.queryOptions({ excludeActive, excludeCompleted: true }),
+  );
+
+  // `null` = still loading (unknown); a number = the not-yet-done count. A domain
+  // or skill that's fully completed simply drops out of `remaining`, so an absent
+  // entry means 0 left, not "unknown".
+  const remainingDomain = (d: string): number | null =>
+    remaining.data ? remaining.data.domains.find((x) => x.domain === d)?.total ?? 0 : null;
+  const remainingSkill = (d: string, skill: string): number | null =>
+    remaining.data
+      ? remaining.data.domains.find((x) => x.domain === d)?.skills.find((s) => s.skill === skill)
+          ?.total ?? 0
+      : null;
+
   const [domain, setDomain] = useState<string | null>(null); // null = Level 1
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
   const [customize, setCustomize] = useState<Scope | null>(null);
@@ -142,6 +161,9 @@ export default function QuestionBankPage() {
                   const dc = counts.data?.domains.find((x) => x.domain === d);
                   const total = dc?.total ?? 0;
                   const tone = DOMAIN_TONES[d];
+                  const left = remainingDomain(d);
+                  const doneFrac =
+                    left !== null && total > 0 ? Math.min(1, Math.max(0, (total - left) / total)) : 0;
                   return (
                     <button
                       key={d}
@@ -153,7 +175,7 @@ export default function QuestionBankPage() {
                       }}
                       className="text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue rounded-card disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      <Card interactive className={cn('border-transparent', tone.bg)}>
+                      <Card interactive className={cn('relative overflow-hidden border-transparent', tone.bg)}>
                         <CardBody className="flex items-center justify-between gap-4">
                           <div>
                             <h3 className="text-h3 font-semibold text-ink-900">{domainLabel(d)}</h3>
@@ -164,11 +186,30 @@ export default function QuestionBankPage() {
                           <div className="flex items-center gap-3">
                             <div className="text-right">
                               <p className="text-h2 font-semibold text-ink-900 tabular-nums">{total}</p>
-                              <p className="text-micro text-ink-500">questions</p>
+                              {/* Same slot as the old "questions" label, now doing double
+                                  duty as the remaining-work indicator once you've started. */}
+                              <p className={cn('text-micro', left != null && left > 0 && left < total ? tone.ring : 'text-ink-500')}>
+                                {left == null || left === total
+                                  ? 'questions'
+                                  : left === 0
+                                    ? 'all done'
+                                    : `${left} left`}
+                              </p>
                             </div>
                             <Icon name="chevron-right" className={cn('text-body', tone.ring)} />
                           </div>
                         </CardBody>
+
+                        {/* Progress sliver — invisible until you've done at least one, so a
+                            fresh category looks untouched; fills in the domain's own hue. */}
+                        {doneFrac > 0 && (
+                          <span className="absolute inset-x-0 bottom-0 h-[3px] bg-ink-900/[0.06]">
+                            <span
+                              className={cn('block h-full rounded-r-full transition-[width] duration-500', tone.accent)}
+                              style={{ width: `${doneFrac * 100}%` }}
+                            />
+                          </span>
+                        )}
                       </Card>
                     </button>
                   );
@@ -217,6 +258,10 @@ export default function QuestionBankPage() {
           <div className="space-y-2">
             {(domainData?.skills ?? []).map((s) => {
               const on = selectedSkills.has(s.skill);
+              const left = remainingSkill(domain, s.skill);
+              const tone = DOMAIN_TONES[domain];
+              const doneFrac =
+                left !== null && s.total > 0 ? Math.min(1, Math.max(0, (s.total - left) / s.total)) : 0;
               return (
                 <button
                   key={s.skill}
@@ -230,7 +275,7 @@ export default function QuestionBankPage() {
                     })
                   }
                   className={cn(
-                    'flex w-full items-center justify-between gap-4 rounded-card border px-5 py-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue',
+                    'relative flex w-full items-center justify-between gap-4 overflow-hidden rounded-card border px-5 py-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue',
                     on ? 'border-blue bg-blue-tint' : 'border-line hover:border-ink-400/40',
                   )}
                 >
@@ -245,7 +290,32 @@ export default function QuestionBankPage() {
                     </span>
                     <span className="text-body font-medium text-ink-900">{s.skill}</span>
                   </span>
-                  <span className="text-small text-ink-500 tabular-nums">{s.total}</span>
+
+                  {/* Remaining / total. The remaining figure is what the user asked for —
+                      how many are left to do — kept subtle with the total muted beside it. */}
+                  {left === 0 && s.total > 0 ? (
+                    <span className="flex shrink-0 items-center gap-1 text-small font-medium text-green">
+                      <Icon name="checkmark-circle" className="text-body" />
+                      Done
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-small tabular-nums">
+                      <span className={cn('font-semibold', left != null && left < s.total ? 'text-ink-900' : 'text-ink-500')}>
+                        {left ?? s.total}
+                      </span>
+                      {left != null && left < s.total && <span className="text-ink-400"> / {s.total}</span>}
+                    </span>
+                  )}
+
+                  {/* Matching sliver, only after some progress — same language as the cards. */}
+                  {doneFrac > 0 && (
+                    <span className="absolute inset-x-0 bottom-0 h-[2px] bg-ink-900/[0.05]">
+                      <span
+                        className={cn('block h-full rounded-r-full transition-[width] duration-500', tone.accent)}
+                        style={{ width: `${doneFrac * 100}%` }}
+                      />
+                    </span>
+                  )}
                 </button>
               );
             })}
