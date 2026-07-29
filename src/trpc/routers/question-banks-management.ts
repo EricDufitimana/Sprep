@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, protectedProcedure } from '../init';
-import { extractedQuestionSchema, questionBankSchema } from '@/lib/validation';
+import { extractedQuestionSchema, questionBankSchema, sectionSchema } from '@/lib/validation';
 import { parseAnswerPdf } from '@/utils/question-bank-parser';
 import { describeQuestions } from '@/utils/bank-description';
 import { fetchAllRows } from '@/utils/paginate';
@@ -16,15 +16,19 @@ import { COMPLETED_ANSWER_FILTER } from './questions';
  */
 
 export const questionBanksManagementRouter = createTRPCRouter({
-  list: protectedProcedure.query(async ({ ctx }) => {
+  list: protectedProcedure
+    .input(z.object({ section: sectionSchema.optional() }).optional())
+    .query(async ({ ctx, input }) => {
     // RLS returns the caller's own banks plus every `is_default` one, so the
     // two built-in SAT banks show up for everybody without being duplicated
     // per account. Built-ins sort first so they read as the starting point.
-    const { data, error } = await ctx.supabase
+    let bankQuery = ctx.supabase
       .from('question_banks')
-      .select('id, name, description, source_file, total_questions, is_default, created_at')
+      .select('id, name, description, source_file, total_questions, is_default, created_at, section')
       .order('is_default', { ascending: false })
       .order('created_at', { ascending: false });
+    if (input?.section) bankQuery = bankQuery.eq('section', input.section);
+    const { data, error } = await bankQuery;
 
     if (error) {
       console.error('❌ [questionBanks.list] Query failed:', error);
@@ -126,11 +130,14 @@ export const questionBanksManagementRouter = createTRPCRouter({
         domain: string | null;
         difficulty: string | null;
         extraction_status: string;
+        section: string;
+        answer_format: string;
+        accepted_answers: unknown;
       };
       const questions = await fetchAllRows<StatsQuestionRow>((from, to) =>
         supabase
           .from('questions')
-          .select('id, external_id, position, question_text, passage, options, correct_answer, explanation, visual_url, visual_data, skill, domain, difficulty, extraction_status')
+          .select('id, external_id, position, question_text, passage, options, correct_answer, explanation, visual_url, visual_data, skill, domain, difficulty, extraction_status, section, answer_format, accepted_answers')
           .eq('bank_id', input.bankId)
           .order('position', { ascending: true, nullsFirst: false })
           .order('id', { ascending: true })
@@ -187,6 +194,8 @@ export const questionBanksManagementRouter = createTRPCRouter({
           externalId: q.external_id,
           position: q.position,
           questionText: q.question_text,
+          section: q.section,
+          answerFormat: q.answer_format,
           skill: q.skill,
           domain: q.domain,
           difficulty: q.difficulty,
@@ -205,7 +214,10 @@ export const questionBanksManagementRouter = createTRPCRouter({
               ? {
                   passage: q.passage,
                   options: q.options,
-                  correctAnswer: q.correct_answer,
+                  correctAnswer:
+                    q.answer_format === 'spr' && Array.isArray(q.accepted_answers)
+                      ? (q.accepted_answers as unknown[]).map(String).join(', ')
+                      : q.correct_answer,
                   explanation: q.explanation,
                   visualUrl: q.visual_url,
                   visualData: q.visual_data,

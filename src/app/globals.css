@@ -66,6 +66,52 @@
   }
 }
 
+/**
+ * Rich math content (<MathHtml>): MathML, inline SVG, base64 images, tables.
+ * The fragments arrive self-contained from the corpus, so styling is scoped
+ * here rather than added at ingest.
+ */
+.math-html math {
+  font-size: 1.08em;
+}
+.math-html p {
+  margin: 0.5rem 0;
+}
+.math-html p:first-child {
+  margin-top: 0;
+}
+.math-html p:last-child {
+  margin-bottom: 0;
+}
+/* Figures: never let a wide graph or data-URI image blow out the column. */
+.math-html img,
+.math-html svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0.75rem auto;
+}
+/* Data tables scroll horizontally inside their own box on narrow screens. */
+.math-html table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  font-size: 0.875rem;
+}
+.math-html th,
+.math-html td {
+  border: 1px solid var(--color-line, #e5e7eb);
+  padding: 0.35rem 0.6rem;
+  text-align: center;
+  white-space: nowrap;
+}
+.math-html th {
+  font-weight: 600;
+  background: var(--color-sunken, #f8fafc);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

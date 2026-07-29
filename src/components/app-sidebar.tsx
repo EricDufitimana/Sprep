@@ -13,6 +13,8 @@ import {
   SidebarButton,
   SidebarLink,
 } from '@/components/ui/sidebar';
+import { ProfileModal } from '@/components/profile-modal';
+import { useSection, SECTION_LABELS } from '@/lib/section';
 
 interface NavItem {
   label: string;
@@ -42,6 +44,8 @@ export function AppSidebar() {
   const router = useRouter();
   const trpc = useTRPC();
   const [open, setOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const { section } = useSection();
 
   // Real profile — no placeholder user.
   const { data: profile } = useQuery(trpc.profile.get.queryOptions());
@@ -114,8 +118,15 @@ export function AppSidebar() {
             className={cn('rounded-control hover:bg-sunken/70', rowLayout)}
           />
 
-          {/* Identity readout, not a link — there is no settings page to open. */}
-          <div className={cn('flex items-center gap-2 rounded-control py-2', rowLayout)}>
+          {/* Identity — opens the profile sheet, where the section is switched. */}
+          <button
+            onClick={() => setProfileOpen(true)}
+            title="Profile & section"
+            className={cn(
+              'flex items-center gap-2 rounded-control py-2 transition-colors hover:bg-sunken/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue',
+              rowLayout,
+            )}
+          >
             <span className="flex h-7 w-7 shrink-0 items-center justify-center">
               {profile?.avatar_url ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -127,11 +138,16 @@ export function AppSidebar() {
               )}
             </span>
             {open && (
-              <span className="truncate whitespace-pre text-sm text-ink-700">{displayName}</span>
+              <span className="flex min-w-0 flex-col items-start">
+                <span className="truncate whitespace-pre text-sm text-ink-700">{displayName}</span>
+                <span className="truncate whitespace-pre text-micro text-blue">{SECTION_LABELS[section]}</span>
+              </span>
             )}
-          </div>
+          </button>
         </div>
       </SidebarBody>
+
+      <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} />
     </Sidebar>
   );
 }

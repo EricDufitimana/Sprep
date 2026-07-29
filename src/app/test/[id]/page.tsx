@@ -7,6 +7,7 @@ import { useTRPC } from '@/trpc/client';
 import { cn } from '@/lib/utils';
 import { QuestionFigure } from '@/components/question-figure';
 import { RichText } from '@/components/rich-text';
+import { MathHtml } from '@/components/math-html';
 
 /**
  * The sitting screen, styled to mimic Bluebook — the real digital SAT app.
@@ -145,6 +146,33 @@ export default function TestPage() {
     return () => clearInterval(id);
   }, [isTimed, timerSeconds, doSubmit]);
 
+  // Keyboard eliminator: ⌘⌥1..4 (Ctrl+Alt on non-Mac) crosses out choice A..D,
+  // pressing the same combo again restores it — a fast way to narrow answers.
+  // `event.code` is used, not `event.key`, because Option+digit on macOS yields
+  // glyphs like "¡"; the physical Digit1..Digit4 codes are layout-independent.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || !e.altKey) return;
+      const match = /^Digit([1-4])$/.exec(e.code);
+      if (!match) return;
+      const qid = questions[current]?.id;
+      const opts = (questions[current]?.options as QuestionOption[]) ?? [];
+      const index = Number(match[1]) - 1;
+      if (!qid || index >= opts.length) return;
+      const letter = opts[index]?.letter ?? LETTERS[index];
+      e.preventDefault();
+      setStruck((prev) => {
+        const list = prev[qid] ?? [];
+        return {
+          ...prev,
+          [qid]: list.includes(letter) ? list.filter((l) => l !== letter) : [...list, letter],
+        };
+      });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [questions, current]);
+
   if (attempt.isLoading) {
     return (
       <div className="dsat-text flex min-h-dvh items-center justify-center text-[#1B1B1B]">
@@ -170,6 +198,9 @@ export default function TestPage() {
   }
 
   const q = questions[current];
+  const isMath = (q as { section?: string }).section === 'math';
+  const isSpr = (q as { answer_format?: string }).answer_format === 'spr';
+  const sectionTitle = isMath ? 'Section 2: Math' : 'Section 1: Reading and Writing';
   const answeredCount = questions.filter((qq) => answers[qq.id]).length;
   const options = ((q.options as QuestionOption[]) ?? []).map((o, i) => ({
     letter: o.letter ?? LETTERS[i],
@@ -182,7 +213,19 @@ export default function TestPage() {
     save.mutate({
       attemptId,
       questionId: q.id,
-      selectedAnswer: next as 'A' | 'B' | 'C' | 'D' | null,
+      selectedAnswer: next,
+      timeSpentMs: accumulateTime(q.id),
+    });
+  };
+
+  /** SPR grid-in: store the raw typed string as the selected answer. */
+  const typeAnswer = (value: string) => {
+    const next = value === '' ? null : value;
+    setAnswers((prev) => ({ ...prev, [q.id]: next }));
+    save.mutate({
+      attemptId,
+      questionId: q.id,
+      selectedAnswer: next,
       timeSpentMs: accumulateTime(q.id),
     });
   };
@@ -213,7 +256,7 @@ export default function TestPage() {
         style={{ backgroundColor: BB.chrome }}
       >
         <div>
-          <h1 className="text-[15px] font-bold leading-tight">Section 1: Reading and Writing</h1>
+          <h1 className="text-[15px] font-bold leading-tight">{sectionTitle}</h1>
           <button
             onClick={() => setExiting(true)}
             className="mt-0.5 flex items-center gap-1.5 rounded border border-[#5B6178] px-2 py-0.5 text-[12px] font-semibold hover:bg-white/60"
@@ -255,6 +298,7 @@ export default function TestPage() {
 
       {reviewing ? (
         <ReviewPanel
+          title={sectionTitle}
           questions={questions}
           answers={answers}
           flags={flags}
@@ -265,9 +309,10 @@ export default function TestPage() {
           onClose={() => setReviewing(false)}
         />
       ) : (
-        /* ── Split panes ───────────────────────────────────────── */
-        <main className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2">
-          {/* Left: stimulus */}
+        /* ── Split panes (single column for math: the stem is self-contained) ── */
+        <main className={cn('grid min-h-0 flex-1 grid-cols-1', !isMath && 'md:grid-cols-2')}>
+          {/* Left: stimulus — R&W only; a math stem carries its own figure. */}
+          {!isMath && (
           <section
             className="min-h-0 overflow-y-auto px-8 py-6 md:border-r"
             style={{ borderColor: '#6B7280' }}
@@ -282,9 +327,10 @@ export default function TestPage() {
               </p>
             )}
           </section>
+          )}
 
-          {/* Right: question + options */}
-          <section className="min-h-0 overflow-y-auto px-8 py-6">
+          {/* Right: question + options (or, for math, the whole self-contained stem) */}
+          <section className={cn('min-h-0 overflow-y-auto px-8 py-6', isMath && 'mx-auto w-full max-w-3xl')}>
             <div
               className="mb-4 flex items-center gap-3 px-1 py-1"
               style={{ backgroundColor: '#F1F2F7' }}
@@ -319,10 +365,19 @@ export default function TestPage() {
               </button>
             </div>
 
-            <p className="dsat-text dsat-bold mb-5">
-              <RichText>{q.question_text}</RichText>
-            </p>
+            {isMath ? (
+              <div className="dsat-text mb-5">
+                <MathHtml html={q.question_text} />
+              </div>
+            ) : (
+              <p className="dsat-text dsat-bold mb-5">
+                <RichText>{q.question_text}</RichText>
+              </p>
+            )}
 
+            {isSpr ? (
+              <SprInput value={answers[q.id] ?? ''} onChange={typeAnswer} />
+            ) : (
             <div role="radiogroup" aria-label="Answer choices" className="space-y-3">
               {options.map((opt) => {
                 const selected = answers[q.id] === opt.letter;
@@ -358,7 +413,7 @@ export default function TestPage() {
                       <span
                         className={cn('dsat-text', isStruck && 'line-through')}
                       >
-                        <RichText>{opt.text}</RichText>
+                        {isMath ? <MathHtml html={opt.text} block={false} /> : <RichText>{opt.text}</RichText>}
                       </span>
                     </button>
 
@@ -376,6 +431,7 @@ export default function TestPage() {
                 );
               })}
             </div>
+            )}
 
             {error && (
               <p
@@ -475,12 +531,14 @@ export default function TestPage() {
  * answered, dashed outline when not, flagged ones marked.
  */
 function ReviewPanel({
+  title,
   questions,
   answers,
   flags,
   onJump,
   onClose,
 }: {
+  title: string;
   questions: { id: string; external_id?: string | null }[];
   answers: Record<string, string | null>;
   flags: Record<string, boolean>;
@@ -492,9 +550,7 @@ function ReviewPanel({
   return (
     <main className="min-h-0 flex-1 overflow-y-auto px-8 py-8">
       <div className="mx-auto max-w-2xl">
-        <h2 className="dsat-text dsat-bold text-center">
-          Section 1: Reading and Writing
-        </h2>
+        <h2 className="dsat-text dsat-bold text-center">{title}</h2>
         <p className="dsat-text mt-1 text-center">
           {unanswered === 0
             ? 'All questions answered.'
@@ -562,5 +618,30 @@ function ReviewPanel({
         </div>
       </div>
     </main>
+  );
+}
+
+/**
+ * Student-produced-response grid-in: a free-text field, mirroring Bluebook's
+ * answer box. The typed value is saved verbatim and graded server-side.
+ */
+function SprInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="max-w-xs">
+      <label className="dsat-text mb-2 block text-[13px] font-semibold">Answer</label>
+      <input
+        type="text"
+        inputMode="text"
+        autoComplete="off"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Type your answer"
+        className="dsat-text w-full rounded-lg border px-4 py-3 outline-none focus-visible:ring-2"
+        style={{ borderColor: BB.optionBorder }}
+      />
+      <p className="mt-2 text-[12px] text-[#5B6178]">
+        Enter a number. Fractions like 3/4 and decimals like 0.75 are both accepted.
+      </p>
+    </div>
   );
 }

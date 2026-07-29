@@ -27,3 +27,43 @@ export const DOMAIN_ORDER: QuestionDomain[] = [
   'expression_of_ideas',
   'standard_english_conventions',
 ];
+
+/** The four math domains, in the order College Board lists them. */
+export type MathDomain =
+  | 'algebra'
+  | 'advanced_math'
+  | 'problem_solving_data_analysis'
+  | 'geometry_trigonometry';
+
+export const MATH_DOMAIN_ORDER: MathDomain[] = [
+  'algebra',
+  'advanced_math',
+  'problem_solving_data_analysis',
+  'geometry_trigonometry',
+];
+
+/**
+ * Official Digital SAT Math domain distribution. A full Math section is 44
+ * questions; a single module is 22.
+ *
+ *   Algebra                            ~35%
+ *   Advanced Math                      ~35%
+ *   Problem-Solving & Data Analysis    ~15%
+ *   Geometry & Trigonometry            ~15%
+ */
+export const MATH_DOMAIN_WEIGHTS: Record<MathDomain, number> = {
+  algebra: 0.35,
+  advanced_math: 0.35,
+  problem_solving_data_analysis: 0.15,
+  geometry_trigonometry: 0.15,
+};
+
+/** One Math module. */
+export const MATH_MODULE_QUESTIONS = 22;
+
+export type Section = 'reading_writing' | 'math';
+
+/** Ordered domain enum values for a section — the axis every page groups by. */
+export function domainOrderFor(section: Section): string[] {
+  return section === 'math' ? MATH_DOMAIN_ORDER : DOMAIN_ORDER;
+}

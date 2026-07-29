@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Geist, EB_Garamond, Noto_Serif, Inter } from 'next/font/google';
 import './globals.css';
 import { TRPCReactProvider } from '@/trpc/client';
+import { SectionProvider } from '@/lib/section';
 
 /**
  * Typography replicates cluely.com's system (scraped from its CSS bundles):
@@ -67,7 +68,9 @@ export default function RootLayout({
         <link rel="stylesheet" href="https://cdn.lineicons.com/4.0/lineicons.css" />
       </head>
       <body className="bg-paper font-sans text-ink-700 antialiased">
-        <TRPCReactProvider>{children}</TRPCReactProvider>
+        <TRPCReactProvider>
+          <SectionProvider>{children}</SectionProvider>
+        </TRPCReactProvider>
       </body>
     </html>
   );

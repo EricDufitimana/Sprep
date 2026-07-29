@@ -7,9 +7,20 @@ import {
   type Difficulty,
   type DomainResponses,
 } from '@/utils/scaled-score';
-import { DSAT_DOMAIN_WEIGHTS, DSAT_MODULE_QUESTIONS } from '@/lib/dsat';
+import {
+  DSAT_DOMAIN_WEIGHTS,
+  DSAT_MODULE_QUESTIONS,
+  MATH_DOMAIN_WEIGHTS,
+  domainOrderFor,
+} from '@/lib/dsat';
+import { sectionSchema } from '@/lib/validation';
 import { DIAGNOSIS_KEYS } from '@/lib/diagnosis';
 import { COMPLETED_ANSWER_FILTER } from './questions';
+
+/** The domain-share weights for a section's scaled-score estimate. */
+function weightsFor(section: 'reading_writing' | 'math'): Record<string, number> {
+  return section === 'math' ? MATH_DOMAIN_WEIGHTS : DSAT_DOMAIN_WEIGHTS;
+}
 
 /** Per-question time budget on the digital SAT R&W (32 min / 27 questions). */
 const BUDGET_SECONDS = Math.round((32 * 60) / DSAT_MODULE_QUESTIONS);
@@ -36,10 +47,14 @@ type AnalyticsRow = {
  * `correctOf` lets callers score "as answered" or a hypothetical (e.g. avoidable
  * misses converted). Rows without a known domain or difficulty are dropped.
  */
-function toDomainGroups(rows: AnalyticsRow[], correctOf: (r: AnalyticsRow) => boolean): DomainResponses[] {
-  return (Object.keys(DSAT_DOMAIN_WEIGHTS) as (keyof typeof DSAT_DOMAIN_WEIGHTS)[]).map((domain) => ({
+function toDomainGroups(
+  rows: AnalyticsRow[],
+  correctOf: (r: AnalyticsRow) => boolean,
+  weights: Record<string, number> = DSAT_DOMAIN_WEIGHTS,
+): DomainResponses[] {
+  return Object.keys(weights).map((domain) => ({
     domain,
-    weight: DSAT_DOMAIN_WEIGHTS[domain],
+    weight: weights[domain],
     responses: rows
       .filter((r) => r.questions?.domain === domain && r.questions?.difficulty != null)
       .map((r) => ({ difficulty: r.questions!.difficulty as Difficulty, isCorrect: correctOf(r) })),
@@ -101,6 +116,7 @@ export const progressRouter = createTRPCRouter({
     .input(
       z
         .object({
+          section: sectionSchema.default('reading_writing'),
           limit: z.number().int().min(1).max(50).default(6),
           /** Ignore skills with too little evidence to be meaningful. */
           minAnswered: z.number().int().min(1).max(100).default(3),
@@ -110,11 +126,13 @@ export const progressRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const limit = input?.limit ?? 6;
       const minAnswered = input?.minAnswered ?? 3;
+      const section = input?.section ?? 'reading_writing';
 
       const { data, error } = await ctx.supabase
         .from('skill_performance')
         .select('domain, skill, total_answered, total_correct, accuracy_percent')
         .eq('user_id', ctx.user.id)
+        .in('domain', domainOrderFor(section))
         .gte('total_answered', minAnswered)
         .order('accuracy_percent', { ascending: true })
         .limit(limit);
@@ -198,7 +216,10 @@ export const progressRouter = createTRPCRouter({
   }),
 
   /** Dashboard summary: latest score, attempt count, average, weakest skill. */
-  overview: protectedProcedure.query(async ({ ctx }) => {
+  overview: protectedProcedure
+    .input(z.object({ section: sectionSchema.default('reading_writing') }).optional())
+    .query(async ({ ctx, input }) => {
+    const section = input?.section ?? 'reading_writing';
     const [{ data: attempts, error: attemptsError }, { data: weakest, error: weakestError }] =
       await Promise.all([
         ctx.supabase
@@ -211,6 +232,7 @@ export const progressRouter = createTRPCRouter({
           .from('skill_performance')
           .select('domain, skill, total_answered, accuracy_percent')
           .eq('user_id', ctx.user.id)
+          .in('domain', domainOrderFor(section))
           .gte('total_answered', 3)
           .order('accuracy_percent', { ascending: true })
           .limit(1),

@@ -17,7 +17,14 @@ import { Stat } from '@/components/ui/stat';
 import { QuestionMeta, QuestionReview } from '@/components/question-review';
 import { RichText } from '@/components/rich-text';
 import { accuracyTone, domainLabel, formatDuration, formatRelative } from '@/lib/labels';
+import { mathPreview } from '@/lib/math-preview';
 import { cn } from '@/lib/utils';
+
+/** One-line preview text: readable math for math questions, rich text otherwise. */
+function QPreview({ text, section }: { text: string; section?: string | null }) {
+  if (section === 'math') return <>{mathPreview(text)}</>;
+  return <RichText>{text}</RichText>;
+}
 
 /** A question bank's record: how it's gone, and what keeps going wrong. */
 export default function BankDetailPage() {
@@ -182,7 +189,7 @@ export default function BankDetailPage() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <p className="line-clamp-2 text-small text-ink-700">
-                        <RichText>{q.questionText}</RichText>
+                        <QPreview text={q.questionText} section={q.section} />
                       </p>
                       <span className="shrink-0 text-small font-medium text-miss tabular-nums">
                         {q.missed}× wrong
@@ -235,7 +242,7 @@ export default function BankDetailPage() {
                 <span className="w-7 shrink-0 text-small text-ink-400 tabular-nums">{i + 1}</span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-small text-ink-700">
-                    <RichText>{q.questionText}</RichText>
+                    <QPreview text={q.questionText} section={q.section} />
                   </p>
                   <p className="text-micro text-ink-400">
                     {q.skill ?? domainLabel(q.domain)}
@@ -292,6 +299,8 @@ export default function BankDetailPage() {
                 yourAnswer: active.detail.yourAnswer,
                 visualUrl: active.detail.visualUrl,
                 visualData: active.detail.visualData,
+                section: active.section,
+                answerFormat: active.answerFormat,
               }}
             />
           </>

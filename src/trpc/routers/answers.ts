@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, protectedProcedure } from '../init';
-import { answerLetterSchema } from '@/lib/validation';
+import { answerValueSchema } from '@/lib/validation';
 import { DIAGNOSIS_KEYS } from '@/lib/diagnosis';
 
 /**
@@ -51,7 +51,8 @@ export const answersRouter = createTRPCRouter({
       z.object({
         attemptId: z.string().uuid(),
         questionId: z.string().uuid(),
-        selectedAnswer: answerLetterSchema.nullable().optional(),
+        // Letter for MCQ, a short free-response string for math SPR.
+        selectedAnswer: answerValueSchema.nullable().optional(),
         flagged: z.boolean().optional(),
         /** Cumulative ms the user has spent on this question so far. */
         timeSpentMs: z.number().int().min(0).optional(),

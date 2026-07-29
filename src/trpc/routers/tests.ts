@@ -22,7 +22,7 @@ import { COMPLETED_ANSWER_FILTER } from './questions';
 
 /** Columns safe to send to a client mid-test. Note the two absentees. */
 const SAFE_QUESTION_COLUMNS =
-  'id, external_id, position, passage, question_text, options, has_visual, visual_data, visual_url, domain, skill, difficulty';
+  'id, external_id, position, passage, question_text, options, has_visual, visual_data, visual_url, domain, skill, difficulty, section, answer_format';
 
 /** Shape of a row selected with SAFE_QUESTION_COLUMNS. */
 interface SafeQuestion {
@@ -38,6 +38,8 @@ interface SafeQuestion {
   domain: string | null;
   skill: string | null;
   difficulty: string | null;
+  section: string;
+  answer_format: string;
 }
 
 /**
@@ -383,7 +385,9 @@ export const testsRouter = createTRPCRouter({
       // Grade against the frozen set, so a module spanning banks scores its own
       // exact questions. Legacy attempts fall back to the bank order.
       const frozen = await frozenQuestionIds(supabase, attempt.id);
-      const gradeQuery = supabase.from('questions').select('id, domain, skill, correct_answer');
+      const gradeQuery = supabase
+        .from('questions')
+        .select('id, domain, skill, correct_answer, answer_format, accepted_answers');
       const { data: questions, error: qError } =
         frozen.length > 0
           ? await gradeQuery.in('id', frozen)
@@ -596,6 +600,9 @@ type ReviewRow = {
     has_visual: boolean;
     visual_data: string | null;
     visual_url: string | null;
+    section: string;
+    answer_format: string;
+    accepted_answers: unknown;
   } | null;
 };
 
@@ -618,7 +625,8 @@ async function loadReviewRows(
       self_diagnosis,
       questions (
         id, external_id, position, domain, skill, passage, question_text,
-        options, correct_answer, explanation, has_visual, visual_data, visual_url
+        options, correct_answer, explanation, has_visual, visual_data, visual_url,
+        section, answer_format, accepted_answers
       )
     `)
     .eq('attempt_id', attemptId);
@@ -687,6 +695,9 @@ function buildResults(
       selectedAnswer: r.selected_answer,
       correctAnswer: r.questions?.correct_answer ?? null,
       explanation: r.questions?.explanation ?? null,
+      section: r.questions?.section ?? 'reading_writing',
+      answerFormat: r.questions?.answer_format ?? 'mcq',
+      acceptedAnswers: r.questions?.accepted_answers ?? null,
       isCorrect: r.is_correct ?? false,
       flagged: r.flagged,
       selfDiagnosis: r.self_diagnosis,

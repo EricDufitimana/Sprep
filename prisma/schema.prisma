@@ -558,6 +558,8 @@ model question_banks {
   total_questions Int?              @default(0)
   created_at      DateTime          @default(now()) @db.Timestamptz(6)
   is_default      Boolean           @default(false)
+  /// 'reading_writing' | 'math'. Which SAT section this bank serves.
+  section         String            @default("reading_writing")
   extraction_jobs extraction_jobs[]
   users           users?            @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   questions       questions[]
@@ -586,6 +588,13 @@ model questions {
   created_at        DateTime             @default(now()) @db.Timestamptz(6)
   is_default        Boolean              @default(false)
   visual_url        String?
+  /// 'reading_writing' | 'math'. Which SAT section this question belongs to.
+  section           String               @default("reading_writing")
+  /// 'mcq' (A–D choices) | 'spr' (student-produced free response, math only).
+  answer_format     String               @default("mcq")
+  /// For SPR questions: the list of accepted answers (numeric-normalized at
+  /// ingest). Null for MCQ, whose answer is the single letter in correct_answer.
+  accepted_answers  Json?
   /// Whether the question is still live in College Board's Bluebook (true) vs.
   /// disclosed/retired (false). Null when the source didn't provide a status.
   active            Boolean?
@@ -815,6 +824,11 @@ enum question_domain {
   craft_and_structure
   expression_of_ideas
   standard_english_conventions
+  // Math domains
+  algebra
+  advanced_math
+  problem_solving_data_analysis
+  geometry_trigonometry
 
   @@schema("public")
 }

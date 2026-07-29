@@ -13,8 +13,11 @@ import { LoadingDots } from '@/components/ui/loading-dots';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { QuestionFigure } from '@/components/question-figure';
+import { MathHtml } from '@/components/math-html';
 import { cn } from '@/lib/utils';
 import { domainLabel } from '@/lib/labels';
+import { useSection } from '@/lib/section';
+import { domainOrderFor } from '@/lib/dsat';
 
 /**
  * Domain-browse & custom set builder — modeled on the College Board Question
@@ -28,18 +31,17 @@ import { domainLabel } from '@/lib/labels';
  * `questions.check`), feeding the same analytics as timed tests.
  */
 
-const DOMAIN_ORDER = [
-  'information_and_ideas',
-  'craft_and_structure',
-  'expression_of_ideas',
-  'standard_english_conventions',
-] as const;
-
 const DOMAIN_TONES: Record<string, { bg: string; ring: string; accent: string }> = {
+  // Reading & Writing
   information_and_ideas: { bg: 'bg-amber-tint', ring: 'text-amber', accent: 'bg-amber' },
   craft_and_structure: { bg: 'bg-violet-tint', ring: 'text-violet', accent: 'bg-violet' },
   expression_of_ideas: { bg: 'bg-green-tint', ring: 'text-green', accent: 'bg-green' },
   standard_english_conventions: { bg: 'bg-blue-tint', ring: 'text-blue', accent: 'bg-blue' },
+  // Math
+  algebra: { bg: 'bg-blue-tint', ring: 'text-blue', accent: 'bg-blue' },
+  advanced_math: { bg: 'bg-violet-tint', ring: 'text-violet', accent: 'bg-violet' },
+  problem_solving_data_analysis: { bg: 'bg-amber-tint', ring: 'text-amber', accent: 'bg-amber' },
+  geometry_trigonometry: { bg: 'bg-green-tint', ring: 'text-green', accent: 'bg-green' },
 };
 
 type Difficulty = 'easy' | 'medium' | 'hard';
@@ -67,12 +69,16 @@ interface BuiltQuestion {
   domain: string | null;
   skill: string | null;
   difficulty: string | null;
+  section?: string | null;
+  answer_format?: string | null;
 }
 
 const EXCLUDE_ACTIVE_KEY = 'qb:excludeActive';
 
 export default function QuestionBankPage() {
   const trpc = useTRPC();
+  const { section } = useSection();
+  const DOMAIN_ORDER = domainOrderFor(section);
 
   // "Exclude active Bluebook questions" — a sticky, page-wide preference. It
   // recomputes every section count and is carried into every set the user
@@ -92,14 +98,14 @@ export default function QuestionBankPage() {
 
   // Counts drive the drill-down and recompute whenever the toggle flips; the
   // customize step layers difficulty/exclusion on top and reports the pool size.
-  const counts = useQuery(trpc.questions.domainCounts.queryOptions({ excludeActive }));
+  const counts = useQuery(trpc.questions.domainCounts.queryOptions({ section, excludeActive }));
 
   // The same counts, but of only the questions the user hasn't done yet. Diffing
   // the two gives a subtle "how much is left in this category" indicator without
   // any new backend work — `excludeCompleted` reuses the exact set-builder logic,
   // so the number shown is what a fresh set would actually draw from.
   const remaining = useQuery(
-    trpc.questions.domainCounts.queryOptions({ excludeActive, excludeCompleted: true }),
+    trpc.questions.domainCounts.queryOptions({ section, excludeActive, excludeCompleted: true }),
   );
 
   // `null` = still loading (unknown); a number = the not-yet-done count. A domain
@@ -117,6 +123,12 @@ export default function QuestionBankPage() {
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
   const [customize, setCustomize] = useState<Scope | null>(null);
   const [session, setSession] = useState<{ questions: BuiltQuestion[]; label: string } | null>(null);
+
+  // Switching section resets the drill-down — an R&W domain is meaningless in math.
+  useEffect(() => {
+    setDomain(null);
+    setSelectedSkills(new Set());
+  }, [section]);
 
   if (session) {
     return (
@@ -341,6 +353,7 @@ export default function QuestionBankPage() {
 
       <CustomizeModal
         scope={customize}
+        section={section}
         scopeLabel={customize ? scopeLabel(customize) : ''}
         excludeActive={excludeActive}
         onClose={() => setCustomize(null)}
@@ -412,12 +425,14 @@ function ExcludeActiveToggle({ value, onChange }: { value: boolean; onChange: (v
 
 function CustomizeModal({
   scope,
+  section,
   scopeLabel,
   excludeActive,
   onClose,
   onBuilt,
 }: {
   scope: Scope | null;
+  section: 'reading_writing' | 'math';
   scopeLabel: string;
   excludeActive: boolean;
   onClose: () => void;
@@ -444,6 +459,7 @@ function CustomizeModal({
     setError(null);
     const diff = Array.from(difficulties);
     const base = {
+      section,
       count,
       difficulty: diff.length ? diff : undefined,
       excludeCompleted,
@@ -452,7 +468,7 @@ function CustomizeModal({
     };
     if (scope.kind === 'all') build.mutate(base);
     else if (scope.kind === 'domain')
-      build.mutate({ ...base, domains: [scope.domain] as ('information_and_ideas' | 'craft_and_structure' | 'expression_of_ideas' | 'standard_english_conventions')[] });
+      build.mutate({ ...base, domains: [scope.domain] as never });
     else build.mutate({ ...base, skills: scope.skills });
   };
 
@@ -646,6 +662,8 @@ function Taker({
 
   const q = questions[index];
   const st = states[q.id] ?? EMPTY_STATE;
+  const isMath = q.section === 'math';
+  const isSpr = q.answer_format === 'spr';
 
   // Reset the stopwatch origin whenever the visible question changes.
   useEffect(() => {
@@ -702,32 +720,50 @@ function Taker({
     void queryClient.prefetchQuery(trpc.questions.reveal.queryOptions({ questionId: q.id }));
   };
 
+  /** SPR grid-in: store the raw typed string as the selected answer. */
+  const typeAnswer = (value: string) => {
+    if (st.result) return;
+    setStates((s) => {
+      const cur = s[q.id] ?? EMPTY_STATE;
+      return { ...s, [q.id]: { ...cur, selected: value === '' ? null : value } };
+    });
+  };
+
   const doCheck = async () => {
     if (st.result || !st.selected || checking) return; // an answer is required
     setChecking(true); // optimistic: show the loading indication right away
     const elapsed = st.timeMs + (Date.now() - startedAtRef.current);
-    // Option letters come from the DB as plain strings; the API narrows to the
-    // answer-letter union, and the taker only ever sets a real option letter.
-    const selected = (st.selected ?? undefined) as 'A' | 'B' | 'C' | 'D' | undefined;
+    const selected = st.selected ?? undefined;
 
-    // Reveal from the prefetched cache — instant when the answer is already in
-    // (prefetched on select); otherwise this awaits the in-flight fetch.
-    const revealed = await queryClient
-      .ensureQueryData(trpc.questions.reveal.queryOptions({ questionId: q.id }))
-      .finally(() => setChecking(false));
-    const isCorrect = selected !== undefined ? selected === revealed.correctAnswer : null;
+    let result: QResult;
+    if (isSpr) {
+      // Free-response grading is numeric and lives server-side; use the recorded
+      // attempt's own result rather than a client-side letter comparison.
+      const graded = await check
+        .mutateAsync({ questionId: q.id, selectedAnswer: selected, timeSpentMs: elapsed })
+        .finally(() => setChecking(false));
+      result = {
+        correctAnswer: graded.correctAnswer,
+        explanation: graded.explanation,
+        isCorrect: graded.isCorrect,
+      };
+    } else {
+      // MCQ: reveal from the prefetched cache for instant feedback, then record.
+      const revealed = await queryClient
+        .ensureQueryData(trpc.questions.reveal.queryOptions({ questionId: q.id }))
+        .finally(() => setChecking(false));
+      const isCorrect =
+        selected !== undefined
+          ? selected.trim().toUpperCase() === revealed.correctAnswer.trim().toUpperCase()
+          : null;
+      result = { correctAnswer: revealed.correctAnswer, explanation: revealed.explanation, isCorrect };
+      check.mutate({ questionId: q.id, selectedAnswer: selected, timeSpentMs: elapsed });
+    }
+
     setStates((s) => ({
       ...s,
-      [q.id]: {
-        ...(s[q.id] ?? EMPTY_STATE),
-        timeMs: elapsed,
-        result: { correctAnswer: revealed.correctAnswer, explanation: revealed.explanation, isCorrect },
-      },
+      [q.id]: { ...(s[q.id] ?? EMPTY_STATE), timeMs: elapsed, result },
     }));
-
-    // Persist the attempt in the background — grading is re-done server-side, so
-    // the record is authoritative even though the UI already moved on.
-    check.mutate({ questionId: q.id, selectedAnswer: selected, timeSpentMs: elapsed });
   };
 
   const isLast = index === questions.length - 1;
@@ -840,9 +876,10 @@ function Taker({
         </div>
       </header>
 
-      {/* Split panes */}
-      <main className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2">
-        {/* Left: passage / figure */}
+      {/* Split panes — single column for math (the stem is self-contained). */}
+      <main className={cn('grid min-h-0 flex-1 grid-cols-1', !isMath && 'md:grid-cols-2')}>
+        {/* Left: passage / figure — R&W only. */}
+        {!isMath && (
         <section className="min-h-0 overflow-y-auto border-[#ECE6DA] px-8 py-8 md:border-r md:px-10">
           <div className="mx-auto max-w-[38rem]">
             <QuestionFigure url={q.visual_url} description={q.visual_data} className="mb-4" />
@@ -866,6 +903,7 @@ function Taker({
             )}
           </div>
         </section>
+        )}
 
         {/* Right: question + choices */}
         <section className="min-h-0 overflow-y-auto border-t border-[#ECE6DA] px-8 py-8 md:border-t-0 md:px-10">
@@ -888,11 +926,45 @@ function Taker({
             </div>
 
             {/* Question stem */}
-            <p className="qb-reading mb-6 font-bold text-[#23201B]">
-              <RichText>{q.question_text}</RichText>
-            </p>
+            {isMath ? (
+              <div className="qb-reading mb-6 text-[#23201B]">
+                <MathHtml html={q.question_text} />
+              </div>
+            ) : (
+              <p className="qb-reading mb-6 font-bold text-[#23201B]">
+                <RichText>{q.question_text}</RichText>
+              </p>
+            )}
 
-            {/* Options */}
+            {/* Answer: free-response (SPR) or multiple choice */}
+            {isSpr ? (
+              <div className="max-w-xs">
+                <label className="mb-2 block text-[12px] font-semibold text-[#6B6559]">Your answer</label>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  disabled={!!st.result}
+                  value={st.selected ?? ''}
+                  onChange={(e) => typeAnswer(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void doCheck(); }}
+                  placeholder="e.g. 3/4 or 0.75"
+                  className={cn(
+                    'qb-reading w-full rounded-2xl border px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-[#3B5BDB]',
+                    st.result
+                      ? st.result.isCorrect
+                        ? 'border-[#2F855A] bg-[#E6F4EC]'
+                        : 'border-[#C2415A] bg-[#FBE9EC]'
+                      : 'border-[#E7E0D2] bg-white',
+                  )}
+                />
+                {st.result && (
+                  <p className="mt-2 text-[13px] text-[#6B6559]">
+                    Accepted answer{st.result.correctAnswer.includes(',') ? 's' : ''}:{' '}
+                    <span className="font-semibold text-[#23201B]">{st.result.correctAnswer}</span>
+                  </p>
+                )}
+              </div>
+            ) : (
             <div role="radiogroup" aria-label="Answer choices" className="space-y-3">
               {options.map((opt) => {
                 const isSel = st.selected === opt.letter;
@@ -935,12 +1007,13 @@ function Taker({
                       {opt.letter}
                     </span>
                     <span className="qb-reading flex-1 text-[#2E2A23]">
-                      <RichText>{opt.text}</RichText>
+                      {isMath ? <MathHtml html={opt.text} block={false} /> : <RichText>{opt.text}</RichText>}
                     </span>
                   </button>
                 );
               })}
             </div>
+            )}
 
             {/* Check / result */}
             {!st.result ? (

@@ -5,11 +5,14 @@ import { createTRPCRouter, protectedProcedure } from '../init';
 import { fetchAllRows } from '@/utils/paginate';
 import {
   answerLetterSchema,
+  answerValueSchema,
   extractionStatusSchema,
   questionDifficultySchema,
   questionDomainSchema,
   questionOptionsSchema,
+  sectionSchema,
 } from '@/lib/validation';
+import { isResponseCorrect } from '@/utils/scoring';
 
 /**
  * Reading and repairing individual questions, plus the untimed browse flow.
@@ -29,7 +32,7 @@ import {
 
 /** Columns safe to send before a reveal — mirrors the timed-test invariant. */
 const SAFE_QUESTION_COLUMNS =
-  'id, external_id, position, passage, question_text, options, has_visual, visual_data, visual_url, domain, skill, difficulty';
+  'id, external_id, position, passage, question_text, options, has_visual, visual_data, visual_url, domain, skill, difficulty, section, answer_format';
 
 /**
  * PostgREST predicate for "this row is a real completion", shared by every
@@ -232,6 +235,7 @@ export const questionsRouter = createTRPCRouter({
     .input(
       z
         .object({
+          section: sectionSchema.default('reading_writing'),
           difficulty: z.array(questionDifficultySchema).optional(),
           excludeCompleted: z.boolean().default(false),
           /** Drop questions still live in Bluebook (active = true). */
@@ -241,6 +245,7 @@ export const questionsRouter = createTRPCRouter({
     )
     .query(async ({ ctx, input }) => {
       const { supabase } = ctx;
+      const section = input?.section ?? 'reading_writing';
 
       // Paged: the visible verified pool exceeds PostgREST's 1000-row cap, so a
       // single select would silently truncate and undercount whole domains.
@@ -249,6 +254,7 @@ export const questionsRouter = createTRPCRouter({
           .from('questions')
           .select('id, domain, skill, active')
           .eq('extraction_status', 'verified')
+          .eq('section', section)
           .order('id', { ascending: true });
         if (input?.difficulty?.length) q = q.in('difficulty', input.difficulty);
         return q.range(from, to);
@@ -309,6 +315,7 @@ export const questionsRouter = createTRPCRouter({
   buildCustomSet: protectedProcedure
     .input(
       z.object({
+        section: sectionSchema.default('reading_writing'),
         domains: z.array(questionDomainSchema).optional(),
         skills: z.array(z.string()).optional(),
         difficulty: z.array(questionDifficultySchema).optional(),
@@ -330,6 +337,7 @@ export const questionsRouter = createTRPCRouter({
           .from('questions')
           .select('id, position, active')
           .eq('extraction_status', 'verified')
+          .eq('section', input.section)
           .order('id', { ascending: true });
         // Skills are the narrower scope; when present they already imply a domain.
         if (input.skills?.length) q = q.in('skill', input.skills);
@@ -411,13 +419,18 @@ export const questionsRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const { data: q, error } = await ctx.supabase
         .from('questions')
-        .select('correct_answer, explanation')
+        .select('correct_answer, explanation, answer_format, accepted_answers')
         .eq('id', input.questionId)
         .single();
       if (error || !q) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Question not found' });
       }
-      return { correctAnswer: q.correct_answer, explanation: q.explanation };
+      // For SPR the "correct answer" shown is the full accepted-answer list.
+      const correctAnswer =
+        q.answer_format === 'spr' && Array.isArray(q.accepted_answers)
+          ? (q.accepted_answers as unknown[]).map(String).join(', ')
+          : q.correct_answer;
+      return { correctAnswer, explanation: q.explanation, answerFormat: q.answer_format };
     }),
 
   /**
@@ -435,7 +448,7 @@ export const questionsRouter = createTRPCRouter({
     .input(
       z.object({
         questionId: z.string().uuid(),
-        selectedAnswer: answerLetterSchema.optional(),
+        selectedAnswer: answerValueSchema.optional(),
         timeSpentMs: z.number().int().min(0).optional(),
       }),
     )
@@ -444,7 +457,7 @@ export const questionsRouter = createTRPCRouter({
 
       const { data: q, error } = await supabase
         .from('questions')
-        .select('id, correct_answer, explanation')
+        .select('id, correct_answer, explanation, answer_format, accepted_answers')
         .eq('id', input.questionId)
         .single();
 
@@ -453,7 +466,14 @@ export const questionsRouter = createTRPCRouter({
       }
 
       const isCorrect =
-        input.selectedAnswer !== undefined ? input.selectedAnswer === q.correct_answer : null;
+        input.selectedAnswer !== undefined
+          ? isResponseCorrect(q as never, input.selectedAnswer)
+          : null;
+
+      const correctAnswerDisplay =
+        q.answer_format === 'spr' && Array.isArray(q.accepted_answers)
+          ? (q.accepted_answers as unknown[]).map(String).join(', ')
+          : q.correct_answer;
 
       const { error: insertError } = await supabase.from('answers').insert({
         question_id: q.id,
@@ -469,6 +489,6 @@ export const questionsRouter = createTRPCRouter({
         console.error('❌ [questions.check] Failed to record attempt:', insertError);
       }
 
-      return { correctAnswer: q.correct_answer, explanation: q.explanation, isCorrect };
+      return { correctAnswer: correctAnswerDisplay, explanation: q.explanation, isCorrect };
     }),
 });

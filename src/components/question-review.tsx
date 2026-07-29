@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
 import { QuestionFigure } from '@/components/question-figure';
 import { RichText } from '@/components/rich-text';
+import { MathHtml } from '@/components/math-html';
 
 export interface ReviewQuestion {
   questionText: string;
@@ -20,9 +21,19 @@ export interface ReviewQuestion {
   skill?: string | null;
   difficulty?: string | null;
   externalId?: string | null;
+  /** 'reading_writing' | 'math'. Math renders rich HTML/MathML. */
+  section?: string | null;
+  /** 'mcq' | 'spr'. SPR shows a typed answer instead of choices. */
+  answerFormat?: string | null;
 }
 
 type Opt = { letter: string; text: string };
+
+/** Stem/choice/explanation text: rich HTML for math, whitelisted text for R&W. */
+function QText({ children, isMath, block = true }: { children: string | null | undefined; isMath: boolean; block?: boolean }) {
+  if (isMath) return <MathHtml html={children} block={block} />;
+  return <RichText>{children}</RichText>;
+}
 
 /**
  * A question with its choices, and the answer behind a single button.
@@ -40,21 +51,26 @@ export function QuestionReview({
 }) {
   const [revealed, setRevealed] = useState(false);
   const options = (question.options as Opt[]) ?? [];
+  const isMath = question.section === 'math';
+  const isSpr = question.answerFormat === 'spr';
 
   return (
     <div className={className}>
       <QuestionFigure url={question.visualUrl} description={question.visualData} className="my-3" />
 
       {question.passage && (
-        <p className="mb-3 whitespace-pre-line text-small leading-6 text-ink-500">
-          <RichText>{question.passage}</RichText>
-        </p>
+        <div className="mb-3 whitespace-pre-line text-small leading-6 text-ink-500">
+          <QText isMath={isMath}>{question.passage}</QText>
+        </div>
       )}
 
-      <p className="mb-3 text-body font-medium text-ink-900">
-        <RichText>{question.questionText}</RichText>
-      </p>
+      <div className="mb-3 text-body font-medium text-ink-900">
+        <QText isMath={isMath}>{question.questionText}</QText>
+      </div>
 
+      {isSpr ? (
+        <SprReview question={question} revealed={revealed} />
+      ) : (
       <div className="space-y-1.5">
         {options.map((opt) => {
           const isPick = question.yourAnswer === opt.letter;
@@ -79,7 +95,7 @@ export function QuestionReview({
             >
               <span className="font-semibold">{opt.letter}</span>
               <span className="flex-1">
-                <RichText>{opt.text}</RichText>
+                <QText isMath={isMath} block={false}>{opt.text}</QText>
               </span>
               {isPick && (
                 <span className="shrink-0 text-micro font-medium text-ink-500">your answer</span>
@@ -94,6 +110,7 @@ export function QuestionReview({
           );
         })}
       </div>
+      )}
 
       {!revealed ? (
         <Button size="sm" className="mt-3" onClick={() => setRevealed(true)}>
@@ -106,11 +123,33 @@ export function QuestionReview({
             <p className="mb-1 text-micro font-medium uppercase tracking-wide text-ink-400">
               Why
             </p>
-            <p className="whitespace-pre-line text-small leading-6 text-ink-700">
-              <RichText>{question.explanation}</RichText>
-            </p>
+            <div className="whitespace-pre-line text-small leading-6 text-ink-700">
+              <QText isMath={isMath}>{question.explanation}</QText>
+            </div>
           </div>
         )
+      )}
+    </div>
+  );
+}
+
+/**
+ * A student-produced-response (grid-in) question in review: no choices, just
+ * the answer the user typed and — after the reveal — the accepted answer(s).
+ */
+function SprReview({ question, revealed }: { question: ReviewQuestion; revealed: boolean }) {
+  const your = question.yourAnswer?.trim();
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline gap-2 rounded-control border border-line px-3 py-2 text-small">
+        <span className="text-micro font-medium uppercase tracking-wide text-ink-400">Your answer</span>
+        <span className="font-mono text-ink-900">{your || '—'}</span>
+      </div>
+      {revealed && (
+        <div className="flex items-baseline gap-2 rounded-control border border-green/50 bg-green-tint px-3 py-2 text-small">
+          <span className="text-micro font-medium uppercase tracking-wide text-ink-400">Accepted</span>
+          <span className="font-mono text-ink-900">{question.correctAnswer || '—'}</span>
+        </div>
       )}
     </div>
   );

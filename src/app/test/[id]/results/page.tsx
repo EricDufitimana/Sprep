@@ -122,6 +122,8 @@ export default function ResultsPage() {
                   yourAnswer: q.selectedAnswer,
                   visualUrl: q.visualUrl,
                   visualData: q.visualData,
+                  section: q.section,
+                  answerFormat: q.answerFormat,
                 }}
               />
               {!q.isCorrect && (

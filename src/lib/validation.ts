@@ -8,13 +8,29 @@ import { z } from 'zod';
 
 export const ANSWER_LETTERS = ['A', 'B', 'C', 'D'] as const;
 
-/** Matches the `question_domain` enum in Postgres. */
+/** Matches the `question_domain` enum in Postgres (both sections). */
 export const questionDomainSchema = z.enum([
+  // Reading & Writing
   'information_and_ideas',
   'craft_and_structure',
   'expression_of_ideas',
   'standard_english_conventions',
+  // Math
+  'algebra',
+  'advanced_math',
+  'problem_solving_data_analysis',
+  'geometry_trigonometry',
 ]);
+
+/** Which SAT section a bank/question/browse query belongs to. */
+export const sectionSchema = z.enum(['reading_writing', 'math']);
+
+/**
+ * A saved answer value. R&W and math MCQ are single letters; math SPR is a
+ * short free-response string (a number/fraction). The letter constraint is not
+ * a security boundary — grading is server-side — so this is deliberately loose.
+ */
+export const answerValueSchema = z.string().max(50);
 
 /** Matches the `question_difficulty` enum in Postgres. */
 export const questionDifficultySchema = z.enum(['easy', 'medium', 'hard']);
