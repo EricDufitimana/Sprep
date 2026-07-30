@@ -1,324 +1,250 @@
 'use client';
 
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useTRPC } from '@/trpc/client';
-import { ChargePicker } from '@/components/charge-picker';
 import { PageHeader } from '@/components/page-header';
 import { Reveal } from '@/components/reveal';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Card, CardBody } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Icon } from '@/components/ui/icon';
-import { Input, Textarea } from '@/components/ui/input';
-import { Modal } from '@/components/ui/modal';
 import { ProgressBar } from '@/components/ui/progress-bar';
-import type { Charge } from '@/lib/types';
+import { Tabs } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+import { MorphemeCard } from '@/components/vocab/morpheme-card';
+import { DecodeTrainer } from '@/components/vocab/decode-trainer';
+import { FreeResponseExercise } from '@/components/vocab/free-response-exercise';
+import {
+  GROUP_ORDER,
+  EXERCISE_LABEL,
+  CHARGE_LABEL,
+  CHARGE_TONE,
+  groupLabel,
+  accuracyTone,
+} from '@/components/vocab/labels';
 
-/** Bold the target word inside its sentence. */
-function Highlighted({ sentence, word }: { sentence: string; word: string }) {
-  const idx = sentence.toLowerCase().indexOf(word.toLowerCase());
-  if (idx === -1) return <>{sentence}</>;
-  return (
-    <>
-      {sentence.slice(0, idx)}
-      <mark className="rounded-sm bg-blue-tint px-1 font-semibold text-blue">
-        {sentence.slice(idx, idx + word.length)}
-      </mark>
-      {sentence.slice(idx + word.length)}
-    </>
-  );
-}
+type TopTab = 'learn' | 'practice' | 'progress';
+type PracticeTab = 'trainer' | 'free';
 
-const CHARGE_LABEL: Record<Charge, string> = {
-  positive: 'Positive',
-  negative: 'Negative',
-  neutral: 'Neutral',
-};
+const TOP_TABS = [
+  { value: 'learn', label: 'Learn' },
+  { value: 'practice', label: 'Practice' },
+  { value: 'progress', label: 'Progress' },
+] as const;
 
-interface Reveal_ {
-  chargeCorrect: boolean;
-  actualCharge: Charge | null;
-  definition: string | null;
-  root: string | null;
-}
+const PRACTICE_TABS = [
+  { value: 'trainer', label: 'Decode Trainer' },
+  { value: 'free', label: 'Free response' },
+] as const;
+
+const TYPE_RANK: Record<string, number> = { prefix: 0, root: 1, suffix: 2 };
 
 export default function VocabularyPage() {
   const trpc = useTRPC();
-  const queryClient = useQueryClient();
+  const [tab, setTab] = useState<TopTab>('practice');
+  const [practice, setPractice] = useState<PracticeTab>('trainer');
 
-  const words = useQuery(trpc.vocabularyManagement.listWords.queryOptions({}));
+  const morphemes = useQuery(trpc.vocabulary.listMorphemes.queryOptions());
+  const progress = useQuery(trpc.vocabulary.progress.queryOptions());
+  const trainerStats = useQuery(trpc.vocabularyTrainer.stats.queryOptions());
 
-  const [index, setIndex] = useState(0);
-  const [charge, setCharge] = useState<Charge | null>(null);
-  const [guess, setGuess] = useState('');
-  const [revealed, setRevealed] = useState<Reveal_ | null>(null);
-  const [correctCount, setCorrectCount] = useState(0);
-  const [addOpen, setAddOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const record = useMutation(
-    trpc.vocabularyManagement.recordAttempt.mutationOptions({
-      onSuccess: (res) => {
-        setRevealed(res);
-        if (res.chargeCorrect) setCorrectCount((c) => c + 1);
-        void queryClient.invalidateQueries();
-      },
-      onError: (e) => setError(e.message),
-    }),
-  );
-
-  const list = words.data ?? [];
-  const entry = list[index];
-  const done = list.length > 0 && index >= list.length;
-
-  const next = () => {
-    setIndex((i) => i + 1);
-    setCharge(null);
-    setGuess('');
-    setRevealed(null);
-    setError(null);
-  };
-
-  const restart = () => {
-    setIndex(0);
-    setCharge(null);
-    setGuess('');
-    setRevealed(null);
-    setCorrectCount(0);
-  };
+  const groups = [...(morphemes.data ?? [])].sort((a, b) => {
+    const ai = GROUP_ORDER.indexOf(a.group);
+    const bi = GROUP_ORDER.indexOf(b.group);
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
 
   return (
     <>
       <PageHeader
         title="Vocabulary"
-        description="Decode words from context — commit a guess before you see the answer."
+        description="Learn the roots, then decode words in context — every attempt is graded and fed back as spaced practice."
       >
-        <Button onClick={() => setAddOpen(true)}>
-          <Icon name="plus" className="text-small" />
-          Add a word
-        </Button>
+        <Tabs items={TOP_TABS} value={tab} onChange={setTab} />
       </PageHeader>
 
-      {words.isLoading ? (
-        <div className="mx-auto h-64 max-w-2xl animate-pulse rounded-card border border-line bg-sunken/50" />
-      ) : list.length === 0 ? (
-        <EmptyState
-          icon="book"
-          title="No words yet"
-          description="Add words you keep tripping over. Each one gets drilled in context — you commit a charge and a meaning before the definition shows."
-          action={
-            <Button onClick={() => setAddOpen(true)}>
-              <Icon name="plus" className="text-small" />
-              Add your first word
-            </Button>
-          }
-        />
-      ) : (
-        <div className="mx-auto max-w-2xl">
-          <div className="mb-4 flex items-center gap-4">
-            <ProgressBar value={(Math.min(index, list.length) / list.length) * 100} label="Set progress" className="flex-1" />
-            <span className="text-small text-ink-500 tabular-nums">
-              {Math.min(index, list.length)}/{list.length}
-            </span>
-          </div>
-
-          {done ? (
+      {/* ── Learn ─────────────────────────────────────────────────────────── */}
+      {tab === 'learn' && (
+        <>
+          {morphemes.isLoading ? (
+            <div className="h-96 animate-pulse rounded-card border border-line bg-sunken/50" />
+          ) : groups.length === 0 ? (
             <EmptyState
-              icon="checkmark-circle"
-              title="Set complete"
-              description={`Charge calls: ${correctCount}/${list.length} correct.`}
-              action={
-                <Button onClick={restart}>
-                  Run it again
-                  <Icon name="reload" className="text-small" />
-                </Button>
-              }
+              icon="book"
+              title="No morphemes yet"
+              description="Run the vocabulary seed to load the roots, prefixes, and suffixes."
+              action={<span className="text-small text-ink-400">npm run seed:vocab</span>}
             />
-          ) : entry ? (
-            <Reveal key={entry.id}>
-              <Card>
-                <CardBody className="space-y-5">
-                  <p className="text-lead leading-7 text-ink-700">
-                    {entry.sentence ? (
-                      <Highlighted sentence={entry.sentence} word={entry.word} />
-                    ) : (
-                      <span className="accent-serif text-h2 text-ink-900">{entry.word}</span>
-                    )}
-                  </p>
+          ) : (
+            <div className="space-y-10">
+              {groups.map((g) => (
+                <section key={g.group}>
+                  <h2 className="mb-3 text-h3 font-semibold text-ink-900">{groupLabel(g.group)}</h2>
+                  <Reveal stagger className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {[...g.morphemes]
+                      .sort((a, b) => (TYPE_RANK[a.type] ?? 9) - (TYPE_RANK[b.type] ?? 9))
+                      .map((m) => (
+                        <MorphemeCard key={m.id} morpheme={m} />
+                      ))}
+                  </Reveal>
+                </section>
+              ))}
+            </div>
+          )}
+        </>
+      )}
 
-                  <div className="space-y-4">
-                    <div>
-                      <p className="mb-1.5 text-small font-medium text-ink-700">Charge in this sentence</p>
-                      <ChargePicker value={charge} onChange={setCharge} disabled={revealed !== null} />
-                    </div>
-                    <Input
-                      label="Your one-line meaning"
-                      placeholder="What do you think it means here?"
-                      value={guess}
-                      onChange={(e) => setGuess(e.target.value)}
-                      disabled={revealed !== null}
-                    />
-                  </div>
-
-                  {error && (
-                    <p role="alert" className="rounded-control bg-miss-tint px-3 py-2 text-small text-miss">
-                      {error}
-                    </p>
-                  )}
-
-                  {!revealed ? (
-                    <div className="flex items-center gap-3">
-                      <Button
-                        disabled={charge === null || record.isPending}
-                        onClick={() =>
-                          record.mutate({
-                            wordId: entry.id,
-                            guessedCharge: charge!,
-                            guessedMeaning: guess || undefined,
-                          })
-                        }
-                      >
-                        {record.isPending ? 'Checking…' : 'Reveal'}
-                        <Icon name="chevron-down" className="text-small" />
-                      </Button>
-                      {charge === null && (
-                        <span className="text-micro text-ink-400">Commit a charge first — that’s the drill.</span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="space-y-3 rounded-control bg-paper p-4">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="accent-serif text-h3 text-ink-900">{entry.word}</span>
-                        {revealed.actualCharge && (
-                          <Badge
-                            tone={
-                              revealed.actualCharge === 'positive'
-                                ? 'green'
-                                : revealed.actualCharge === 'negative'
-                                  ? 'miss'
-                                  : 'blue'
-                            }
-                          >
-                            {CHARGE_LABEL[revealed.actualCharge]}
-                          </Badge>
-                        )}
-                        <Badge tone={revealed.chargeCorrect ? 'green' : 'miss'}>
-                          {revealed.chargeCorrect
-                            ? 'Your charge: correct'
-                            : `You said ${charge ? CHARGE_LABEL[charge].toLowerCase() : '—'}`}
-                        </Badge>
-                      </div>
-                      {revealed.definition && <p className="text-body text-ink-700">{revealed.definition}</p>}
-                      {revealed.root && (
-                        <p className="text-small text-ink-500">
-                          <span className="font-medium text-ink-700">Root: </span>
-                          {revealed.root}
-                        </p>
-                      )}
-                      {guess.trim() && (
-                        <p className="text-small text-ink-500">
-                          <span className="font-medium text-ink-700">You wrote: </span>“{guess.trim()}”
-                        </p>
-                      )}
-                      <Button size="sm" onClick={next}>
-                        {index === list.length - 1 ? 'Finish set' : 'Next word'}
-                        <Icon name="arrow-right" className="text-small" />
-                      </Button>
-                    </div>
-                  )}
-                </CardBody>
-              </Card>
-            </Reveal>
-          ) : null}
+      {/* ── Practice ──────────────────────────────────────────────────────── */}
+      {tab === 'practice' && (
+        <div className="mx-auto max-w-2xl space-y-5">
+          <div className="flex justify-center">
+            <Tabs items={PRACTICE_TABS} value={practice} onChange={setPractice} />
+          </div>
+          {practice === 'trainer' ? <DecodeTrainer /> : <FreeResponseExercise />}
         </div>
       )}
 
-      <AddWordModal open={addOpen} onClose={() => setAddOpen(false)} />
+      {/* ── Progress ──────────────────────────────────────────────────────── */}
+      {tab === 'progress' && (
+        <div className="mx-auto max-w-2xl space-y-8">
+          <TrainerStatsPanel stats={trainerStats.data} loading={trainerStats.isLoading} />
+
+          {progress.data && (progress.data.byGroup.length > 0 || progress.data.byExercise.length > 0) && (
+            <>
+              <ProgressSection
+                title="By meaning-family"
+                subtitle="Which root and prefix families you're weakest on."
+                rows={progress.data.byGroup.map((r) => ({ ...r, label: groupLabel(r.key) }))}
+              />
+              <ProgressSection
+                title="By exercise type"
+                subtitle="Roots practice and free-response grading."
+                rows={progress.data.byExercise.map((r) => ({ ...r, label: EXERCISE_LABEL[r.key] ?? r.key }))}
+              />
+            </>
+          )}
+        </div>
+      )}
     </>
   );
 }
 
-function AddWordModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const trpc = useTRPC();
-  const queryClient = useQueryClient();
+interface ProgressRow {
+  key: string;
+  label: string;
+  attempts: number;
+  correct: number;
+  accuracyPercent: number;
+}
 
-  const [word, setWord] = useState('');
-  const [sentence, setSentence] = useState('');
-  const [definition, setDefinition] = useState('');
-  const [root, setRoot] = useState('');
-  const [charge, setCharge] = useState<Charge | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const create = useMutation(
-    trpc.vocabularyManagement.createWord.mutationOptions({
-      onSuccess: async () => {
-        await queryClient.invalidateQueries();
-        setWord('');
-        setSentence('');
-        setDefinition('');
-        setRoot('');
-        setCharge(null);
-        setError(null);
-        onClose();
-      },
-      onError: (e) => setError(e.message),
-    }),
-  );
-
+function ProgressSection({ title, subtitle, rows }: { title: string; subtitle: string; rows: ProgressRow[] }) {
+  if (rows.length === 0) return null;
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Add a word"
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button
-            disabled={create.isPending}
-            onClick={() => {
-              setError(null);
-              if (!charge) return setError('Pick the word’s charge.');
-              create.mutate({ word, sentence, definition, root: root || undefined, charge });
-            }}
-          >
-            {create.isPending ? 'Saving…' : 'Save word'}
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-4">
-        <Input label="Word" placeholder="intransigent" value={word} onChange={(e) => setWord(e.target.value)} />
-        <Textarea
-          label="Sentence using it"
-          placeholder="Negotiations collapsed after the delegation’s intransigent refusal to compromise."
-          rows={3}
-          value={sentence}
-          onChange={(e) => setSentence(e.target.value)}
-        />
-        <Input
-          label="Definition"
-          placeholder="Refusing to compromise."
-          value={definition}
-          onChange={(e) => setDefinition(e.target.value)}
-        />
-        <Input
-          label="Root (optional)"
-          placeholder="Latin in- (not) + transigere (to come to agreement)"
-          value={root}
-          onChange={(e) => setRoot(e.target.value)}
-        />
+    <Card>
+      <CardBody className="space-y-4">
         <div>
-          <p className="mb-1.5 text-small font-medium text-ink-700">Charge</p>
-          <ChargePicker value={charge} onChange={setCharge} />
+          <h2 className="text-body font-semibold text-ink-900">{title}</h2>
+          <p className="text-small text-ink-500">{subtitle}</p>
         </div>
-        {error && (
-          <p role="alert" className="rounded-control bg-miss-tint px-3 py-2 text-small text-miss">
-            {error}
+        <div className="space-y-4">
+          {rows.map((r) => (
+            <div key={r.key} className="space-y-1.5">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-small font-medium text-ink-700">{r.label}</span>
+                <span className="text-small tabular-nums text-ink-500">
+                  {r.accuracyPercent}% <span className="text-ink-400">({r.correct}/{r.attempts})</span>
+                </span>
+              </div>
+              <ProgressBar value={r.accuracyPercent} tone={accuracyTone(r.accuracyPercent)} label={r.label} />
+            </div>
+          ))}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+type TrainerStats = {
+  byCharge: { key: string; attempts: number; accuracyPercent: number }[];
+  chargeReadAccuracy: number | null;
+  decodeVsGuess: {
+    withHint: { attempts: number; accuracyPercent: number };
+    withoutHint: { attempts: number; accuracyPercent: number };
+  };
+  weakestRootFamily: { key: string; attempts: number; accuracyPercent: number } | null;
+  rootFamilies: { key: string; attempts: number; accuracyPercent: number }[];
+};
+
+function TrainerStatsPanel({ stats, loading }: { stats?: TrainerStats; loading: boolean }) {
+  if (loading) return <div className="h-56 animate-pulse rounded-card border border-line bg-sunken/50" />;
+
+  const hasData =
+    stats && (stats.byCharge.length > 0 || stats.rootFamilies.length > 0 ||
+      stats.decodeVsGuess.withHint.attempts > 0 || stats.decodeVsGuess.withoutHint.attempts > 0);
+
+  if (!hasData) {
+    return (
+      <EmptyState
+        icon="bar-chart"
+        title="No decode practice yet"
+        description="Run a Decode Trainer session and your accuracy by charge, decode-vs-guess, and weakest root-family show up here."
+        action={<span className="text-small text-ink-400">Head to the Practice tab</span>}
+      />
+    );
+  }
+
+  const { decodeVsGuess } = stats;
+  return (
+    <Card>
+      <CardBody className="space-y-5">
+        <div>
+          <h2 className="text-body font-semibold text-ink-900">Decode Trainer</h2>
+          <p className="text-small text-ink-500">Where the grading says you stand — so you know what to study.</p>
+        </div>
+
+        {stats.byCharge.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-small font-medium text-ink-700">By charge</p>
+            {stats.byCharge.map((c) => (
+              <div key={c.key} className="flex items-center justify-between text-small">
+                <Badge tone={CHARGE_TONE[c.key]}>{CHARGE_LABEL[c.key] ?? c.key}</Badge>
+                <span className="tabular-nums text-ink-500">{c.accuracyPercent}% <span className="text-ink-400">({c.attempts})</span></span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-control bg-sunken/40 p-3 text-center">
+            <p className="text-micro uppercase tracking-wide text-ink-400">With hint</p>
+            <p className="text-h3 font-semibold tabular-nums text-ink-900">
+              {decodeVsGuess.withHint.attempts ? `${decodeVsGuess.withHint.accuracyPercent}%` : '—'}
+            </p>
+            <p className="text-micro text-ink-400">{decodeVsGuess.withHint.attempts} answers</p>
+          </div>
+          <div className="rounded-control bg-sunken/40 p-3 text-center">
+            <p className="text-micro uppercase tracking-wide text-ink-400">No hint</p>
+            <p className="text-h3 font-semibold tabular-nums text-ink-900">
+              {decodeVsGuess.withoutHint.attempts ? `${decodeVsGuess.withoutHint.accuracyPercent}%` : '—'}
+            </p>
+            <p className="text-micro text-ink-400">{decodeVsGuess.withoutHint.attempts} answers</p>
+          </div>
+        </div>
+
+        {stats.chargeReadAccuracy !== null && (
+          <p className="text-small text-ink-500">
+            You read a word&apos;s charge right <span className="font-medium text-ink-700">{stats.chargeReadAccuracy}%</span> of the time.
           </p>
         )}
-      </div>
-    </Modal>
+
+        {stats.weakestRootFamily && (
+          <div className="rounded-control border border-amber/30 bg-amber-tint/40 p-3">
+            <p className="text-small font-medium text-ink-900">Weakest root-family: {groupLabel(stats.weakestRootFamily.key)}</p>
+            <p className="text-small text-ink-600">
+              {stats.weakestRootFamily.accuracyPercent}% across {stats.weakestRootFamily.attempts} answers — review it in Learn.
+            </p>
+          </div>
+        )}
+      </CardBody>
+    </Card>
   );
 }

@@ -457,6 +457,8 @@ model users {
   question_banks              question_banks[]
   questions                   questions[]
   test_attempts               test_attempts[]
+  morpheme_attempts           morpheme_attempts[]
+  vocab_review_state          vocab_review_state[]
   vocabulary_attempts         vocabulary_attempts[]
   vocabulary_sets             vocabulary_sets[]
   vocabulary_words            vocabulary_words[]
@@ -636,16 +638,80 @@ model test_attempts {
 }
 
 model vocabulary_attempts {
-  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  word_id          String           @db.Uuid
-  user_id          String           @default(dbgenerated("auth.uid()")) @db.Uuid
+  id               String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  word_id          String                @db.Uuid
+  user_id          String                @default(dbgenerated("auth.uid()")) @db.Uuid
   guessed_charge   word_charge?
   guessed_meaning  String?
   charge_correct   Boolean?
-  created_at       DateTime         @default(now()) @db.Timestamptz(6)
-  users            users            @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  vocabulary_words vocabulary_words @relation(fields: [word_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  exercise_type    vocab_exercise_type?
+  user_answer      String?
+  ai_score         Int?
+  ai_verdict       String?
+  ai_feedback      String?
+  was_correct      Boolean?
+  used_hint        Boolean?
+  trainer_mode     String?
+  created_at       DateTime              @default(now()) @db.Timestamptz(6)
+  users            users                 @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vocabulary_words vocabulary_words      @relation(fields: [word_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+  @@schema("public")
+}
+
+model vocab_review_state {
+  id                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id             String           @default(dbgenerated("auth.uid()")) @db.Uuid
+  word_id             String           @db.Uuid
+  box                 Int              @default(1)
+  consecutive_correct Int              @default(0)
+  times_seen          Int              @default(0)
+  times_correct       Int              @default(0)
+  learned             Boolean          @default(false)
+  source              String           @default("seed")
+  due_at              DateTime         @default(now()) @db.Timestamptz(6)
+  last_seen_at        DateTime?        @db.Timestamptz(6)
+  created_at          DateTime         @default(now()) @db.Timestamptz(6)
+  users               users            @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  vocabulary_words    vocabulary_words @relation(fields: [word_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, word_id])
+  @@index([user_id, due_at], map: "idx_review_state_due")
+  @@index([word_id], map: "idx_review_state_word")
+  @@schema("public")
+}
+
+model morpheme_attempts {
+  id            String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id       String              @default(dbgenerated("auth.uid()")) @db.Uuid
+  morpheme_id   String              @db.Uuid
+  exercise_type vocab_exercise_type
+  was_correct   Boolean
+  ai_score      Int?
+  created_at    DateTime            @default(now()) @db.Timestamptz(6)
+  users         users               @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  morphemes     morphemes           @relation(fields: [morpheme_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id, created_at(sort: Desc)], map: "idx_morpheme_attempts_user")
+  @@index([morpheme_id], map: "idx_morpheme_attempts_morpheme")
+  @@schema("public")
+}
+
+model morphemes {
+  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type              morpheme_type
+  text              String
+  meaning           String
+  meaning_group     String
+  charge            morpheme_charge?
+  example_words     Json                @default("[]")
+  created_at        DateTime            @default(now()) @db.Timestamptz(6)
+  morpheme_attempts morpheme_attempts[]
+  vocabulary_words  vocabulary_words[]
+
+  @@unique([type, text])
+  @@index([meaning_group], map: "idx_morphemes_group")
+  @@index([type], map: "idx_morphemes_type")
   @@schema("public")
 }
 
@@ -663,18 +729,29 @@ model vocabulary_sets {
 model vocabulary_words {
   id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   set_id              String?               @db.Uuid
-  user_id             String                @default(dbgenerated("auth.uid()")) @db.Uuid
+  user_id             String?               @default(dbgenerated("auth.uid()")) @db.Uuid
   word                String
   sentence            String?
   definition          String?
   root                String?
+  root_id             String?               @db.Uuid
+  is_default          Boolean               @default(false)
   charge              word_charge?
   part_of_speech      String?
+  false_friend        Boolean               @default(false)
+  sat_meaning         String?
+  everyday_meaning    String?
+  no_decode           Boolean               @default(false)
+  memory_hook         String?
   created_at          DateTime              @default(now()) @db.Timestamptz(6)
   vocabulary_attempts vocabulary_attempts[]
+  vocab_review_state  vocab_review_state[]
   vocabulary_sets     vocabulary_sets?      @relation(fields: [set_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  users               users                 @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  morphemes           morphemes?            @relation(fields: [root_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  users               users?                @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+  @@index([is_default], map: "idx_vocabulary_words_default")
+  @@index([root_id], map: "idx_vocabulary_words_root")
   @@schema("public")
 }
 
@@ -837,6 +914,30 @@ enum word_charge {
   positive
   negative
   neutral
+
+  @@schema("public")
+}
+
+enum morpheme_type {
+  root
+  prefix
+  suffix
+
+  @@schema("public")
+}
+
+enum morpheme_charge {
+  positive
+  negative
+  neutral
+
+  @@schema("public")
+}
+
+enum vocab_exercise_type {
+  multiple_choice
+  decode
+  free_response
 
   @@schema("public")
 }

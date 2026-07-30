@@ -41,6 +41,18 @@ export const extractionStatusSchema = z.enum(['verified', 'needs_review', 'skipp
 /** Matches the `word_charge` enum in Postgres. */
 export const wordChargeSchema = z.enum(['positive', 'negative', 'neutral']);
 
+/** Matches the `morpheme_charge` enum in Postgres (nullable in the column). */
+export const morphemeChargeSchema = z.enum(['positive', 'negative', 'neutral']);
+
+/** Matches the `morpheme_type` enum in Postgres. */
+export const morphemeTypeSchema = z.enum(['root', 'prefix', 'suffix']);
+
+/** Matches the `vocab_exercise_type` enum in Postgres. */
+export const vocabExerciseTypeSchema = z.enum(['multiple_choice', 'decode', 'free_response']);
+
+/** A word scores as "learned" on free response at or above this AI score. */
+export const FREE_RESPONSE_PASS_SCORE = 70;
+
 export const answerLetterSchema = z.enum(ANSWER_LETTERS, {
   errorMap: () => ({ message: 'Answer must be A, B, C, or D' }),
 });

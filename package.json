@@ -14,7 +14,9 @@
     "db:studio": "prisma studio",
     "test": "node --test --experimental-strip-types \"src/utils/tests/*.test.ts\"",
     "typecheck": "tsc --noEmit",
-    "seed:banks": "node --experimental-strip-types --env-file=.env.local scripts/seed-default-banks.mjs"
+    "seed:banks": "node --experimental-strip-types --env-file=.env.local scripts/seed-default-banks.mjs",
+    "seed:vocab": "node --experimental-strip-types --env-file=.env.local scripts/seed-vocabulary.mjs",
+    "seed:sat-vocab": "node --experimental-strip-types --env-file=.env.local scripts/seed-sat-vocab.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.2",

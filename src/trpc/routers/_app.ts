@@ -8,6 +8,8 @@ import { modulesManagementRouter } from './modules-management';
 import { questionsRouter } from './questions';
 import { testsRouter } from './tests';
 import { vocabularyManagementRouter } from './vocabulary-management';
+import { vocabularyRouter } from './vocabulary';
+import { vocabularyTrainerRouter } from './vocabulary-trainer';
 
 export const appRouter = createTRPCRouter({
   health: healthRouter,
@@ -17,6 +19,8 @@ export const appRouter = createTRPCRouter({
   questionBanksManagement: questionBanksManagementRouter,
   modulesManagement: modulesManagementRouter,
   vocabularyManagement: vocabularyManagementRouter,
+  vocabulary: vocabularyRouter,
+  vocabularyTrainer: vocabularyTrainerRouter,
   progress: progressRouter,
   profile: profileRouter,
 });
