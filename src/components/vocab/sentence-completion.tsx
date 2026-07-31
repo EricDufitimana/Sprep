@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useTRPC } from '@/trpc/client';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTRPC, useTRPCClient } from '@/trpc/client';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardBody } from '@/components/ui/card';
@@ -36,6 +36,14 @@ interface GradeResult {
   options: { word: string; role: string; why: string; isAnswer: boolean }[];
 }
 
+interface Item {
+  wordId: string;
+  blankedSentence: string;
+  partOfSpeech: string | null;
+  options: string[];
+  difficulty: string;
+}
+
 /**
  * (d) Sentence completion — the SAT "words in context" drill. A real sentence
  * with the word blanked and four options, three of which are engineered traps.
@@ -43,12 +51,63 @@ interface GradeResult {
  */
 export function SentenceCompletionExercise() {
   const trpc = useTRPC();
+  const client = useTRPCClient();
   const queryClient = useQueryClient();
 
-  const item = useQuery(trpc.vocabulary.sentenceCompletion.queryOptions());
+  // The question is fetched imperatively (not via useQuery) so that returning to
+  // the page never refetches and swaps out an in-progress question, and so the
+  // NEXT question can be prefetched into a buffer for an instant advance.
+  const [current, setCurrent] = useState<Item | null>(null);
+  const [buffer, setBuffer] = useState<Item | null>(null);
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
   const [selected, setSelected] = useState<string | null>(null);
   const [result, setResult] = useState<GradeResult | null>(null);
   const [score, setScore] = useState({ correct: 0, total: 0 });
+
+  const fetchOne = useCallback(
+    () => client.vocabulary.sentenceCompletion.query() as Promise<Item>,
+    [client],
+  );
+
+  // Avoid short-term repeats: remember the last 25 words shown and re-roll a
+  // freshly fetched item if it's one of them. This also guarantees the prefetched
+  // buffer is a different word from the one currently on screen.
+  const recent = useRef<string[]>([]);
+  const fetchFresh = useCallback(async (): Promise<Item> => {
+    let item = await fetchOne();
+    for (let i = 0; i < 6 && recent.current.includes(item.wordId); i++) {
+      item = await fetchOne();
+    }
+    recent.current.push(item.wordId);
+    if (recent.current.length > 25) recent.current.shift();
+    return item;
+  }, [fetchOne]);
+
+  const load = useCallback(async () => {
+    setPhase('loading');
+    setErrorMsg(null);
+    recent.current = [];
+    try {
+      const a = await fetchFresh();
+      setCurrent(a);
+      setPhase('ready');
+      // Prefetch the next question in the background for an instant advance.
+      fetchFresh().then(setBuffer).catch(() => {});
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : 'Could not load a sentence.');
+      setPhase('error');
+    }
+  }, [fetchFresh]);
+
+  // Initial load, guarded against Strict Mode's double-invoke.
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void load();
+  }, [load]);
 
   const grade = useMutation(
     trpc.vocabulary.gradeSentenceCompletion.mutationOptions({
@@ -64,17 +123,35 @@ export function SentenceCompletionExercise() {
     setSelected(null);
     setResult(null);
     grade.reset();
-    void item.refetch();
+    if (buffer) {
+      // Instant: show the prefetched question, then refill the buffer in the background.
+      setCurrent(buffer);
+      setBuffer(null);
+      fetchFresh().then(setBuffer).catch(() => {});
+    } else {
+      // Buffer not ready yet — fetch one, keeping the loader brief.
+      setPhase('loading');
+      fetchFresh()
+        .then((a) => {
+          setCurrent(a);
+          setPhase('ready');
+          fetchFresh().then(setBuffer).catch(() => {});
+        })
+        .catch((e) => {
+          setErrorMsg(e instanceof Error ? e.message : 'Could not load a sentence.');
+          setPhase('error');
+        });
+    }
   };
 
-  if (item.isLoading) {
+  if (phase === 'loading' && !current) {
     return <div className="h-72 animate-pulse rounded-card border border-line bg-sunken/50" />;
   }
-  if (item.isError || !item.data) {
-    return <ExerciseError message={item.error?.message ?? 'Could not load a sentence.'} onRetry={() => item.refetch()} />;
+  if (phase === 'error' || !current) {
+    return <ExerciseError message={errorMsg ?? 'Could not load a sentence.'} onRetry={() => void load()} />;
   }
 
-  const q = item.data;
+  const q = current;
   const [before, after] = q.blankedSentence.split(BLANK_TOKEN);
   const diff = DIFFICULTY_META[q.difficulty] ?? DIFFICULTY_META.gentle;
 
