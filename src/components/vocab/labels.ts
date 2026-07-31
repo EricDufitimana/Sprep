@@ -35,6 +35,7 @@ export const EXERCISE_LABEL: Record<string, string> = {
   multiple_choice: 'Multiple choice',
   decode: 'Decode the word',
   free_response: 'Free response',
+  sentence_completion: 'Sentence completion',
 };
 
 export const CHARGE_LABEL: Record<string, string> = {

@@ -13,6 +13,8 @@ import { Badge } from '@/components/ui/badge';
 import { MorphemeCard } from '@/components/vocab/morpheme-card';
 import { DecodeTrainer } from '@/components/vocab/decode-trainer';
 import { FreeResponseExercise } from '@/components/vocab/free-response-exercise';
+import { SentenceCompletionExercise } from '@/components/vocab/sentence-completion';
+import { FlashcardDeck } from '@/components/vocab/flashcard-deck';
 import {
   GROUP_ORDER,
   EXERCISE_LABEL,
@@ -23,7 +25,8 @@ import {
 } from '@/components/vocab/labels';
 
 type TopTab = 'learn' | 'practice' | 'progress';
-type PracticeTab = 'trainer' | 'free';
+type PracticeTab = 'trainer' | 'context' | 'free';
+type LearnMode = 'browse' | 'flashcards';
 
 const TOP_TABS = [
   { value: 'learn', label: 'Learn' },
@@ -33,7 +36,13 @@ const TOP_TABS = [
 
 const PRACTICE_TABS = [
   { value: 'trainer', label: 'Decode Trainer' },
+  { value: 'context', label: 'Sentence completion' },
   { value: 'free', label: 'Free response' },
+] as const;
+
+const LEARN_TABS = [
+  { value: 'browse', label: 'Browse' },
+  { value: 'flashcards', label: 'Flashcards' },
 ] as const;
 
 const TYPE_RANK: Record<string, number> = { prefix: 0, root: 1, suffix: 2 };
@@ -42,10 +51,13 @@ export default function VocabularyPage() {
   const trpc = useTRPC();
   const [tab, setTab] = useState<TopTab>('practice');
   const [practice, setPractice] = useState<PracticeTab>('trainer');
+  const [learnMode, setLearnMode] = useState<LearnMode>('browse');
 
   const morphemes = useQuery(trpc.vocabulary.listMorphemes.queryOptions());
   const progress = useQuery(trpc.vocabulary.progress.queryOptions());
   const trainerStats = useQuery(trpc.vocabularyTrainer.stats.queryOptions());
+  const morphemeProgress = useQuery(trpc.vocabulary.morphemeProgress.queryOptions());
+  const wordCoverage = useQuery(trpc.vocabulary.wordCoverage.queryOptions());
 
   const groups = [...(morphemes.data ?? [])].sort((a, b) => {
     const ai = GROUP_ORDER.indexOf(a.group);
@@ -65,7 +77,15 @@ export default function VocabularyPage() {
       {/* ── Learn ─────────────────────────────────────────────────────────── */}
       {tab === 'learn' && (
         <>
-          {morphemes.isLoading ? (
+          <div className="mb-6 flex justify-center">
+            <Tabs items={LEARN_TABS} value={learnMode} onChange={setLearnMode} />
+          </div>
+
+          {learnMode === 'flashcards' ? (
+            <div className="mx-auto max-w-2xl">
+              <FlashcardDeck />
+            </div>
+          ) : morphemes.isLoading ? (
             <div className="h-96 animate-pulse rounded-card border border-line bg-sunken/50" />
           ) : groups.length === 0 ? (
             <EmptyState
@@ -99,13 +119,25 @@ export default function VocabularyPage() {
           <div className="flex justify-center">
             <Tabs items={PRACTICE_TABS} value={practice} onChange={setPractice} />
           </div>
-          {practice === 'trainer' ? <DecodeTrainer /> : <FreeResponseExercise />}
+          {practice === 'trainer' ? (
+            <DecodeTrainer />
+          ) : practice === 'context' ? (
+            <SentenceCompletionExercise />
+          ) : (
+            <FreeResponseExercise />
+          )}
         </div>
       )}
 
       {/* ── Progress ──────────────────────────────────────────────────────── */}
       {tab === 'progress' && (
         <div className="mx-auto max-w-2xl space-y-8">
+          <CoveragePanel
+            coverage={wordCoverage.data}
+            morphemes={morphemeProgress.data}
+            loading={wordCoverage.isLoading || morphemeProgress.isLoading}
+          />
+
           <TrainerStatsPanel stats={trainerStats.data} loading={trainerStats.isLoading} />
 
           {progress.data && (progress.data.byGroup.length > 0 || progress.data.byExercise.length > 0) && (
@@ -158,6 +190,106 @@ function ProgressSection({ title, subtitle, rows }: { title: string; subtitle: s
             </div>
           ))}
         </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+interface Coverage {
+  total: number;
+  practiced: number;
+  learned: number;
+}
+
+interface MorphemeProgress {
+  total: number;
+  learned: number;
+  seen: number;
+  byGroup: { key: string; total: number; learned: number; seen: number }[];
+}
+
+/** Coverage across the corpus: SAT words practised, and morphemes learned. */
+function CoveragePanel({
+  coverage,
+  morphemes,
+  loading,
+}: {
+  coverage?: Coverage;
+  morphemes?: MorphemeProgress;
+  loading: boolean;
+}) {
+  if (loading) return <div className="h-64 animate-pulse rounded-card border border-line bg-sunken/50" />;
+  if (!coverage && !morphemes) return null;
+
+  const wordPct = coverage && coverage.total > 0 ? Math.round((coverage.practiced / coverage.total) * 100) : 0;
+  const morphPct = morphemes && morphemes.total > 0 ? Math.round((morphemes.learned / morphemes.total) * 100) : 0;
+
+  return (
+    <Card>
+      <CardBody className="space-y-6">
+        <div>
+          <h2 className="text-body font-semibold text-ink-900">Corpus coverage</h2>
+          <p className="text-small text-ink-500">How much of the material you&apos;ve actually worked through.</p>
+        </div>
+
+        {coverage && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-control bg-sunken/40 p-3 text-center">
+                <p className="text-micro uppercase tracking-wide text-ink-400">SAT words practised</p>
+                <p className="text-h3 font-semibold tabular-nums text-ink-900">
+                  {coverage.practiced}
+                  <span className="text-body font-normal text-ink-400"> / {coverage.total}</span>
+                </p>
+              </div>
+              <div className="rounded-control bg-sunken/40 p-3 text-center">
+                <p className="text-micro uppercase tracking-wide text-ink-400">Words learned</p>
+                <p className="text-h3 font-semibold tabular-nums text-ink-900">
+                  {coverage.learned}
+                  <span className="text-body font-normal text-ink-400"> / {coverage.total}</span>
+                </p>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-small font-medium text-ink-700">Words seen across all exercises</span>
+                <span className="text-small tabular-nums text-ink-500">{wordPct}%</span>
+              </div>
+              <ProgressBar value={wordPct} tone="blue" label="SAT words practised" />
+              <p className="text-micro text-ink-400">
+                {coverage.total - coverage.practiced} words still untouched.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {morphemes && (
+          <div className="space-y-3 border-t border-line pt-5">
+            <div className="flex items-baseline justify-between">
+              <div>
+                <p className="text-small font-medium text-ink-700">Roots, prefixes & suffixes learned</p>
+                <p className="text-micro text-ink-400">{morphemes.seen} seen · {morphemes.total - morphemes.seen} not started</p>
+              </div>
+              <span className="text-small tabular-nums text-ink-500">
+                {morphemes.learned} <span className="text-ink-400">/ {morphemes.total}</span>
+              </span>
+            </div>
+            <ProgressBar value={morphPct} tone={accuracyTone(morphPct)} label="Morphemes learned" />
+
+            {morphemes.byGroup.length > 0 && (
+              <div className="grid gap-x-4 gap-y-2 pt-1 sm:grid-cols-2">
+                {morphemes.byGroup.map((g) => (
+                  <div key={g.key} className="flex items-center justify-between text-small">
+                    <span className="truncate text-ink-600">{groupLabel(g.key)}</span>
+                    <span className="ml-2 shrink-0 tabular-nums text-ink-400">
+                      {g.learned}/{g.total}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </CardBody>
     </Card>
   );

@@ -458,6 +458,7 @@ model users {
   questions                   questions[]
   test_attempts               test_attempts[]
   morpheme_attempts           morpheme_attempts[]
+  morpheme_review_state       morpheme_review_state[]
   vocab_review_state          vocab_review_state[]
   vocabulary_attempts         vocabulary_attempts[]
   vocabulary_sets             vocabulary_sets[]
@@ -704,14 +705,36 @@ model morphemes {
   meaning           String
   meaning_group     String
   charge            morpheme_charge?
-  example_words     Json                @default("[]")
-  created_at        DateTime            @default(now()) @db.Timestamptz(6)
-  morpheme_attempts morpheme_attempts[]
-  vocabulary_words  vocabulary_words[]
+  example_words          Json                     @default("[]")
+  created_at             DateTime                 @default(now()) @db.Timestamptz(6)
+  morpheme_attempts      morpheme_attempts[]
+  morpheme_review_state  morpheme_review_state[]
+  vocabulary_words       vocabulary_words[]
 
   @@unique([type, text])
   @@index([meaning_group], map: "idx_morphemes_group")
   @@index([type], map: "idx_morphemes_type")
+  @@schema("public")
+}
+
+model morpheme_review_state {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id             String    @default(dbgenerated("auth.uid()")) @db.Uuid
+  morpheme_id         String    @db.Uuid
+  box                 Int       @default(1)
+  consecutive_correct Int       @default(0)
+  times_seen          Int       @default(0)
+  times_correct       Int       @default(0)
+  learned             Boolean   @default(false)
+  due_at              DateTime  @default(now()) @db.Timestamptz(6)
+  last_seen_at        DateTime? @db.Timestamptz(6)
+  created_at          DateTime  @default(now()) @db.Timestamptz(6)
+  users               users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  morphemes           morphemes @relation(fields: [morpheme_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, morpheme_id])
+  @@index([user_id, due_at], map: "idx_morpheme_review_due")
+  @@index([morpheme_id], map: "idx_morpheme_review_morpheme")
   @@schema("public")
 }
 
@@ -938,6 +961,7 @@ enum vocab_exercise_type {
   multiple_choice
   decode
   free_response
+  sentence_completion
 
   @@schema("public")
 }

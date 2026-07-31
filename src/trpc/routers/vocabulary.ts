@@ -3,6 +3,12 @@ import { TRPCError } from '@trpc/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createTRPCRouter, protectedProcedure } from '../init';
 import { FREE_RESPONSE_PASS_SCORE } from '@/lib/validation';
+import {
+  blankSentence,
+  buildDistractors,
+  classifyTrap,
+  type WordRow as SatWordRow,
+} from '@/lib/vocab/sat-distractors';
 
 /**
  * The vocabulary learning module: a shared corpus of morphemes (roots, prefixes,
@@ -51,6 +57,11 @@ function shuffle<T>(arr: T[]): T[] {
 
 const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
+/** Flashcard spaced repetition — the same Leitner scheme the Decode Trainer uses. */
+const FLASH_MAX_BOX = 5;
+const FLASH_LEARN_STREAK = 3;
+const FLASH_INTERVAL_DAYS: Record<number, number> = { 1: 0, 2: 1, 3: 3, 4: 7, 5: 16 };
+
 /** n distinct values from `pool` excluding anything in `exclude`. */
 function distractors(pool: string[], exclude: Set<string>, n: number): string[] {
   const seen = new Set(exclude);
@@ -62,6 +73,40 @@ function distractors(pool: string[], exclude: Set<string>, n: number): string[] 
     out.push(v);
   }
   return out;
+}
+
+interface WordRow {
+  id: string;
+  word: string;
+  definition: string | null;
+  charge: Charge | null;
+  root_id: string | null;
+  part_of_speech: string | null;
+  sentence: string | null;
+}
+
+/** DB row → the shape the SAT trap engine works on. */
+const toSatRow = (r: WordRow): SatWordRow => ({
+  word: r.word,
+  definition: r.definition ?? '',
+  charge: r.charge,
+  rootId: r.root_id,
+});
+
+/** Every shared (default) word that has a definition — the corpus both the
+ *  free-response and sentence-completion generators draw from. */
+async function loadDefaultWords(supabase: SupabaseClient): Promise<WordRow[]> {
+  const { data, error } = await supabase
+    .from('vocabulary_words')
+    .select('id, word, definition, charge, root_id, part_of_speech, sentence')
+    .eq('is_default', true)
+    .not('definition', 'is', null);
+
+  if (error) {
+    console.error('❌ [vocabulary.loadDefaultWords] Query failed:', error);
+    throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not load words' });
+  }
+  return (data ?? []) as unknown as WordRow[];
 }
 
 async function loadMorphemes(supabase: SupabaseClient): Promise<MorphemeRow[]> {
@@ -396,6 +441,281 @@ export const vocabularyRouter = createTRPCRouter({
       };
     }),
 
+  // ── (d) Sentence completion — SAT "words in context", auto-graded, no AI ──
+
+  /**
+   * A real example sentence with the target word blanked, plus four base-form
+   * options. The three wrong options are not filler: each is an SAT-style trap
+   * built by @/lib/vocab/sat-distractors — a reversal (opposite meaning), a
+   * same-tone lookalike, a topical associate, or an impressive-but-unrelated
+   * word. The correct option is never marked; gradeSentenceCompletion re-derives
+   * it and only then reveals which trap each wrong option was.
+   */
+  sentenceCompletion: protectedProcedure.query(async ({ ctx }) => {
+    const rows = await loadDefaultWords(ctx.supabase);
+    const usable = rows.filter((r) => r.sentence && r.definition && r.part_of_speech);
+
+    if (usable.length < 4) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Not enough words with sentences seeded yet' });
+    }
+
+    // Walk candidates in random order until one both blanks cleanly (its sentence
+    // really contains the word) and yields a full trap set from its part-of-speech
+    // pool. In practice the first candidate almost always works.
+    for (const target of shuffle(usable)) {
+      const blanked = blankSentence(target.sentence!, target.word);
+      if (!blanked) continue;
+
+      const pool = rows
+        .filter((r) => r.id !== target.id && r.definition && r.part_of_speech === target.part_of_speech)
+        .map(toSatRow);
+
+      const built = buildDistractors(toSatRow(target), pool, target.sentence!);
+      if (!built) continue;
+
+      // No answer marker: the four options ship as a flat, shuffled list.
+      return {
+        wordId: target.id,
+        blankedSentence: blanked,
+        partOfSpeech: target.part_of_speech,
+        options: built.options,
+        difficulty: built.difficulty,
+      };
+    }
+
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Could not build a sentence-completion item' });
+  }),
+
+  gradeSentenceCompletion: protectedProcedure
+    .input(
+      z.object({
+        wordId: z.string().uuid(),
+        options: z.array(z.string().min(1)).min(2).max(6),
+        selected: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Re-fetch the target (with its sentence) — correctness and the trap
+      // explanations are always re-derived server-side, never trusted from the client.
+      const { data: target, error: targetError } = await ctx.supabase
+        .from('vocabulary_words')
+        .select('id, word, definition, charge, root_id, part_of_speech, sentence')
+        .eq('id', input.wordId)
+        .single();
+
+      if (targetError || !target || !target.definition) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Word not found' });
+      }
+      const targetRow = target as unknown as WordRow;
+
+      const correct = input.selected.trim().toLowerCase() === targetRow.word.toLowerCase();
+
+      const { error: logError } = await ctx.supabase.from('vocabulary_attempts').insert({
+        word_id: targetRow.id,
+        exercise_type: 'sentence_completion',
+        user_answer: input.selected.trim(),
+        was_correct: correct,
+      });
+      if (logError) {
+        console.error('❌ [vocabulary.gradeSentenceCompletion] Log failed:', logError);
+      }
+
+      // Pull the option words' rows so each trap can be classified and explained.
+      const { data: optionRows } = await ctx.supabase
+        .from('vocabulary_words')
+        .select('word, definition, charge, root_id')
+        .eq('is_default', true)
+        .in('word', input.options);
+
+      const rowByWord = new Map<string, SatWordRow>();
+      for (const r of (optionRows ?? []) as unknown as WordRow[]) {
+        rowByWord.set(r.word.toLowerCase(), toSatRow(r));
+      }
+      const answerSat = toSatRow(targetRow);
+      rowByWord.set(answerSat.word.toLowerCase(), answerSat);
+
+      const sentence = targetRow.sentence ?? '';
+      const options = input.options.map((opt) => {
+        const row = rowByWord.get(opt.toLowerCase()) ?? { word: opt, definition: '', charge: null, rootId: null };
+        const { role, why } = classifyTrap(row, answerSat, sentence);
+        return { word: opt, role, why, isAnswer: opt.toLowerCase() === answerSat.word.toLowerCase() };
+      });
+
+      return {
+        correct,
+        correctWord: targetRow.word,
+        definition: targetRow.definition ?? '',
+        charge: targetRow.charge as Charge | null,
+        options,
+      };
+    }),
+
+  // ── (e) Morpheme flashcards — learn the roots / prefixes / suffixes ────────
+
+  /**
+   * The flashcard deck: every shared morpheme joined with this user's private
+   * review state, ordered for study — cards due for review first, then never-seen
+   * cards, then ones still in progress, with learned cards last.
+   */
+  flashcardDeck: protectedProcedure
+    .input(z.object({ group: z.string().optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const rows = await loadMorphemes(ctx.supabase);
+      const { data: stateData, error } = await ctx.supabase
+        .from('morpheme_review_state')
+        .select('morpheme_id, box, learned, due_at, times_seen');
+      if (error) {
+        console.error('❌ [vocabulary.flashcardDeck] Query failed:', error);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not load your flashcards' });
+      }
+
+      const stateById = new Map((stateData ?? []).map((s) => [s.morpheme_id as string, s]));
+      const now = Date.now();
+      const filtered = input?.group ? rows.filter((m) => m.meaning_group === input.group) : rows;
+
+      const cards = filtered.map((m) => {
+        const st = stateById.get(m.id);
+        return {
+          id: m.id,
+          type: m.type,
+          text: m.text,
+          meaning: m.meaning,
+          group: m.meaning_group,
+          charge: m.charge,
+          exampleWords: m.example_words ?? [],
+          box: (st?.box as number | undefined) ?? 0,
+          learned: (st?.learned as boolean | undefined) ?? false,
+          seen: !!st,
+          due: st ? new Date(st.due_at as string).getTime() <= now : true,
+        };
+      });
+
+      // due-unlearned (0) → unseen (1) → in-progress (2) → learned (3)
+      const rank = (c: (typeof cards)[number]) => (c.learned ? 3 : !c.seen ? 1 : c.due ? 0 : 2);
+      cards.sort((a, b) => rank(a) - rank(b));
+      return cards;
+    }),
+
+  /**
+   * Record a flashcard self-review. "Knew it" advances the Leitner box; "still
+   * learning" resets it to box 1. A card is learned after 3 in a row (or box 5).
+   */
+  reviewFlashcard: protectedProcedure
+    .input(z.object({ morphemeId: z.string().uuid(), knew: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const { data: existing } = await ctx.supabase
+        .from('morpheme_review_state')
+        .select('id, box, consecutive_correct, times_seen, times_correct')
+        .eq('morpheme_id', input.morphemeId)
+        .maybeSingle();
+
+      const prevBox = existing?.box ?? 1;
+      const prevStreak = existing?.consecutive_correct ?? 0;
+      const box = input.knew ? Math.min(prevBox + 1, FLASH_MAX_BOX) : 1;
+      const streak = input.knew ? prevStreak + 1 : 0;
+      const learned = streak >= FLASH_LEARN_STREAK || box >= FLASH_MAX_BOX;
+      const dueAt = new Date(Date.now() + FLASH_INTERVAL_DAYS[box] * 86_400_000).toISOString();
+
+      const row = {
+        morpheme_id: input.morphemeId,
+        box,
+        consecutive_correct: streak,
+        times_seen: (existing?.times_seen ?? 0) + 1,
+        times_correct: (existing?.times_correct ?? 0) + (input.knew ? 1 : 0),
+        learned,
+        due_at: dueAt,
+        last_seen_at: new Date().toISOString(),
+      };
+
+      if (existing) {
+        await ctx.supabase.from('morpheme_review_state').update(row).eq('id', existing.id);
+      } else {
+        const { error } = await ctx.supabase.from('morpheme_review_state').insert(row);
+        if (error) console.error('❌ [vocabulary.reviewFlashcard] insert failed:', error);
+      }
+
+      return { learned, box };
+    }),
+
+  /**
+   * Morpheme-learning progress: how many roots/prefixes/suffixes are learned,
+   * seen-but-not-yet-learned, and untouched — overall and per meaning-family.
+   */
+  morphemeProgress: protectedProcedure.query(async ({ ctx }) => {
+    const rows = await loadMorphemes(ctx.supabase);
+    const { data: stateData, error } = await ctx.supabase
+      .from('morpheme_review_state')
+      .select('morpheme_id, learned, times_seen');
+    if (error) {
+      console.error('❌ [vocabulary.morphemeProgress] Query failed:', error);
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not load morpheme progress' });
+    }
+
+    const stateById = new Map((stateData ?? []).map((s) => [s.morpheme_id as string, s]));
+    type Bucket = { total: number; learned: number; seen: number };
+    const byGroup = new Map<string, Bucket>();
+    let total = 0;
+    let learned = 0;
+    let seen = 0;
+
+    for (const m of rows) {
+      const st = stateById.get(m.id);
+      const isLearned = (st?.learned as boolean | undefined) === true;
+      const isSeen = !!st && ((st.times_seen as number | undefined) ?? 0) > 0;
+      total += 1;
+      if (isLearned) learned += 1;
+      if (isSeen) seen += 1;
+
+      const g = byGroup.get(m.meaning_group) ?? { total: 0, learned: 0, seen: 0 };
+      g.total += 1;
+      if (isLearned) g.learned += 1;
+      if (isSeen) g.seen += 1;
+      byGroup.set(m.meaning_group, g);
+    }
+
+    const groups = Array.from(byGroup.entries())
+      .map(([key, b]) => ({ key, ...b }))
+      .sort((a, b) => a.learned / a.total - b.learned / b.total);
+
+    return { total, learned, seen, byGroup: groups };
+  }),
+
+  /**
+   * SAT-word coverage across every practice exercise: how many of the shared
+   * (default) words the user has actually practised at least once — a distinct
+   * word_id in vocabulary_attempts covers the Decode Trainer, sentence completion
+   * and free response — plus how many have reached "learned" in the review system.
+   */
+  wordCoverage: protectedProcedure.query(async ({ ctx }) => {
+    const [totalRes, attemptsRes, reviewRes] = await Promise.all([
+      ctx.supabase
+        .from('vocabulary_words')
+        .select('id', { count: 'exact', head: true })
+        .eq('is_default', true),
+      ctx.supabase
+        .from('vocabulary_attempts')
+        .select('word_id, vocabulary_words!inner ( is_default )'),
+      ctx.supabase.from('vocab_review_state').select('word_id, learned'),
+    ]);
+
+    if (attemptsRes.error || reviewRes.error) {
+      console.error('❌ [vocabulary.wordCoverage] Query failed:', attemptsRes.error ?? reviewRes.error);
+      throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not load word coverage' });
+    }
+
+    const total = totalRes.count ?? 0;
+
+    const practicedIds = new Set<string>();
+    for (const row of attemptsRes.data ?? []) {
+      const w = row.vocabulary_words as unknown as { is_default: boolean } | null;
+      if (w?.is_default && row.word_id) practicedIds.add(row.word_id as string);
+    }
+
+    const learned = (reviewRes.data ?? []).filter((r) => r.learned === true).length;
+
+    return { total, practiced: practicedIds.size, learned };
+  }),
+
   // ── Progress: where each meaning-family and exercise type stands ──────────
 
   /**
@@ -412,7 +732,7 @@ export const vocabularyRouter = createTRPCRouter({
       ctx.supabase
         .from('vocabulary_attempts')
         .select('was_correct, exercise_type, vocabulary_words!inner ( morphemes ( meaning_group ) )')
-        .eq('exercise_type', 'free_response'),
+        .in('exercise_type', ['free_response', 'sentence_completion']),
     ]);
 
     if (morphemeRes.error || freeRes.error) {
@@ -441,7 +761,7 @@ export const vocabularyRouter = createTRPCRouter({
     for (const row of freeRes.data ?? []) {
       const word = row.vocabulary_words as unknown as { morphemes: { meaning_group: string } | null } | null;
       const group = word?.morphemes?.meaning_group;
-      bump(byExercise, 'free_response', row.was_correct as boolean | null);
+      bump(byExercise, row.exercise_type as string, row.was_correct as boolean | null);
       if (group) bump(byGroup, group, row.was_correct as boolean | null);
     }
 
