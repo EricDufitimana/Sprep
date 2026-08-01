@@ -18,6 +18,13 @@ const CHARGE_TONE: Record<string, BadgeTone> = { positive: 'green', negative: 'm
 type TypeFilter = 'all' | 'prefix' | 'root' | 'suffix';
 type Mode = 'all' | 'missed';
 
+interface MorphemeProgress {
+  total: number;
+  learned: number;
+  seen: number;
+  byGroup: { key: string; total: number; learned: number; seen: number }[];
+}
+
 const TYPE_CHIPS: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'prefix', label: 'Prefixes' },
@@ -52,11 +59,34 @@ export function FlashcardDeck({ onContinue }: { onContinue?: () => void }) {
 
   const review = useMutation(
     trpc.vocabulary.reviewFlashcard.mutationOptions({
-      onSuccess: () => {
+      // The "Morphemes learned" bar is updated optimistically in answer(); only
+      // re-sync from the server if a save actually fails.
+      onError: () => {
         void queryClient.invalidateQueries(trpc.vocabulary.morphemeProgress.queryFilter());
       },
     }),
   );
+
+  /** Immediately reflect a self-assessment in the learned counter (no round-trip). */
+  const bumpProgress = (knew: boolean, c: { seen: boolean; learned: boolean; group: string }) => {
+    const dSeen = c.seen ? 0 : 1;
+    const dLearned = (knew ? 1 : 0) - (c.learned ? 1 : 0);
+    if (dSeen === 0 && dLearned === 0) return;
+    queryClient.setQueryData<MorphemeProgress>(
+      trpc.vocabulary.morphemeProgress.queryOptions().queryKey,
+      (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          seen: old.seen + dSeen,
+          learned: old.learned + dLearned,
+          byGroup: old.byGroup.map((g) =>
+            g.key === c.group ? { ...g, seen: g.seen + dSeen, learned: g.learned + dLearned } : g,
+          ),
+        };
+      },
+    );
+  };
 
   const resetSession = () => {
     setPos(0);
@@ -196,6 +226,7 @@ export function FlashcardDeck({ onContinue }: { onContinue?: () => void }) {
 
   const card = cards[pos];
   const answer = (knew: boolean) => {
+    bumpProgress(knew, card); // optimistic — the bar moves the instant you answer
     review.mutate({ morphemeId: card.id, knew });
     setSession((s) => ({ reviewed: s.reviewed + 1, knew: s.knew + (knew ? 1 : 0) }));
     setPos((i) => i + 1);

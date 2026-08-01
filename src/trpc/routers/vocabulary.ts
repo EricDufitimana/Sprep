@@ -59,7 +59,6 @@ const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
 /** Flashcard spaced repetition — the same Leitner scheme the Decode Trainer uses. */
 const FLASH_MAX_BOX = 5;
-const FLASH_LEARN_STREAK = 3;
 const FLASH_INTERVAL_DAYS: Record<number, number> = { 1: 0, 2: 1, 3: 3, 4: 7, 5: 16 };
 
 /** n distinct values from `pool` excluding anything in `exclude`. */
@@ -616,8 +615,11 @@ export const vocabularyRouter = createTRPCRouter({
     }),
 
   /**
-   * Record a flashcard self-review. "Knew it" advances the Leitner box; "still
-   * learning" resets it to box 1. A card is learned after 3 in a row (or box 5).
+   * Record a flashcard self-review. The self-assessment IS the learned state:
+   * "I knew it" marks the piece learned immediately, "still learning" un-marks it.
+   * The Leitner box still advances/resets underneath to schedule spaced reviews,
+   * but `learned` tracks the last answer so the "Morphemes learned" count reflects
+   * exactly what the user just said.
    */
   reviewFlashcard: protectedProcedure
     .input(z.object({ morphemeId: z.string().uuid(), knew: z.boolean() }))
@@ -632,7 +634,7 @@ export const vocabularyRouter = createTRPCRouter({
       const prevStreak = existing?.consecutive_correct ?? 0;
       const box = input.knew ? Math.min(prevBox + 1, FLASH_MAX_BOX) : 1;
       const streak = input.knew ? prevStreak + 1 : 0;
-      const learned = streak >= FLASH_LEARN_STREAK || box >= FLASH_MAX_BOX;
+      const learned = input.knew;
       const dueAt = new Date(Date.now() + FLASH_INTERVAL_DAYS[box] * 86_400_000).toISOString();
 
       const row = {
