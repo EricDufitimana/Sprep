@@ -355,7 +355,7 @@ export default function TestPage() {
               <button
                 onClick={() => setEliminating((e) => !e)}
                 aria-pressed={eliminating}
-                title="Cross out answer choices"
+                title={eliminating ? 'Hide answer eliminator' : 'Show answer eliminator'}
                 className={cn(
                   'ml-auto flex h-6 items-center rounded border px-1.5 text-[11px] font-bold',
                   eliminating ? 'border-[#324DC7] bg-[#324DC7] text-white' : 'border-[#5B6178]',
@@ -417,14 +417,35 @@ export default function TestPage() {
                       </span>
                     </button>
 
-                    {/* Bluebook's per-option eliminator, shown only in ABC mode */}
+                    {/* Per-option eliminator: a subtle cross, shown when the
+                        eliminator is toggled on from the toolbar. Click to cross
+                        the choice out, click again to restore it. */}
                     {eliminating && (
                       <button
                         onClick={() => toggleStrike(opt.letter)}
                         aria-label={`${isStruck ? 'Restore' : 'Cross out'} choice ${opt.letter}`}
-                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[#5B6178] text-[11px] font-semibold"
+                        aria-pressed={isStruck}
+                        title={isStruck ? 'Restore answer' : 'Cross out answer'}
+                        className={cn(
+                          'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#324DC7]',
+                          isStruck
+                            ? 'border-[#5B6178] bg-[#5B6178] text-white'
+                            : 'border-transparent text-[#5B6178]/35 hover:border-[#5B6178] hover:text-[#5B6178]',
+                        )}
                       >
-                        <span className={cn(isStruck && 'line-through')}>{opt.letter}</span>
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                          strokeLinecap="round"
+                          aria-hidden
+                        >
+                          <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
+                        </svg>
                       </button>
                     )}
                   </div>
