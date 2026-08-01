@@ -638,6 +638,12 @@ function Taker({
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
+  // Answer eliminator: toggled from the "More" menu. When on, each choice shows a
+  // subtle cross; clicking it strikes that choice out (click again to restore).
+  // Struck letters are tracked per question.
+  const [eliminating, setEliminating] = useState(false);
+  const [struck, setStruck] = useState<Record<string, string[]>>({});
+
   // Per-question count-up: the ref marks when the current question came on
   // screen; a low-frequency tick just forces the clock to re-render.
   const startedAtRef = useRef<number>(Date.now());
@@ -718,6 +724,14 @@ function Taker({
     // Prefetch the answer the moment a pick is committed, so "Check" is instant.
     // Fetching only after a selection keeps a set from being mined without an attempt.
     void queryClient.prefetchQuery(trpc.questions.reveal.queryOptions({ questionId: q.id }));
+  };
+
+  /** Cross out / restore one choice for the current question. */
+  const toggleStrike = (letter: string) => {
+    setStruck((s) => {
+      const list = s[q.id] ?? [];
+      return { ...s, [q.id]: list.includes(letter) ? list.filter((l) => l !== letter) : [...list, letter] };
+    });
   };
 
   /** SPR grid-in: store the raw typed string as the selected answer. */
@@ -862,6 +876,27 @@ function Taker({
                     ✓
                   </span>
                 </button>
+                <button
+                  role="menuitemcheckbox"
+                  aria-checked={eliminating}
+                  onClick={() => {
+                    setEliminating((e) => !e);
+                    setMenuOpen(false);
+                  }}
+                  className="flex w-full items-center justify-between gap-3 px-3.5 py-2 text-left text-[13px] text-[#23201B] hover:bg-[#FAF8F3]"
+                >
+                  Cross out answers
+                  <span
+                    className={
+                      'flex h-4 w-4 items-center justify-center rounded-[5px] border text-[10px] font-bold ' +
+                      (eliminating
+                        ? 'border-[#3B5BDB] bg-[#3B5BDB] text-white'
+                        : 'border-[#CFC7B4] text-transparent')
+                    }
+                  >
+                    ✓
+                  </span>
+                </button>
               </div>
             )}
           </div>
@@ -970,46 +1005,70 @@ function Taker({
                 const isSel = st.selected === opt.letter;
                 const isCorrect = st.result?.correctAnswer === opt.letter;
                 const isWrongPick = st.result && isSel && !isCorrect;
+                const isStruck = (struck[q.id] ?? []).includes(opt.letter);
                 return (
-                  <button
-                    key={opt.letter}
-                    role="radio"
-                    aria-checked={isSel}
-                    disabled={!!st.result}
-                    onClick={() => select(opt.letter)}
-                    className={cn(
-                      'group flex w-full items-start gap-3.5 rounded-2xl border px-4 py-3.5 text-left transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3B5BDB]',
-                      st.result
-                        ? isCorrect
-                          ? 'border-[#2F855A] bg-[#E6F4EC]'
-                          : isWrongPick
-                            ? 'border-[#C2415A] bg-[#FBE9EC]'
-                            : 'border-[#E7E0D2] bg-white opacity-70'
-                        : isSel
-                          ? 'border-[#3B5BDB] bg-[#EEF2FF] shadow-[0_2px_0_rgba(59,91,219,0.18)]'
-                          : 'border-[#E7E0D2] bg-white hover:border-[#C9C0AD] hover:bg-[#FFFDF8]',
-                    )}
-                  >
-                    <span
+                  <div key={opt.letter} className="flex items-center gap-2">
+                    <button
+                      role="radio"
+                      aria-checked={isSel}
+                      disabled={!!st.result}
+                      onClick={() => select(opt.letter)}
                       className={cn(
-                        'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[13px] font-bold transition-colors',
+                        'group flex flex-1 items-start gap-3.5 rounded-2xl border px-4 py-3.5 text-left transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3B5BDB]',
                         st.result
                           ? isCorrect
-                            ? 'border-[#2F855A] bg-[#2F855A] text-white'
+                            ? 'border-[#2F855A] bg-[#E6F4EC]'
                             : isWrongPick
-                              ? 'border-[#C2415A] bg-[#C2415A] text-white'
-                              : 'border-[#CFC7B4] text-[#6B6559]'
+                              ? 'border-[#C2415A] bg-[#FBE9EC]'
+                              : 'border-[#E7E0D2] bg-white opacity-70'
                           : isSel
-                            ? 'border-[#3B5BDB] bg-[#3B5BDB] text-white'
-                            : 'border-[#CFC7B4] text-[#6B6559] group-hover:border-[#A9A08B]',
+                            ? 'border-[#3B5BDB] bg-[#EEF2FF] shadow-[0_2px_0_rgba(59,91,219,0.18)]'
+                            : 'border-[#E7E0D2] bg-white hover:border-[#C9C0AD] hover:bg-[#FFFDF8]',
+                        isStruck && !st.result && 'opacity-45',
                       )}
                     >
-                      {opt.letter}
-                    </span>
-                    <span className="qb-reading flex-1 text-[#2E2A23]">
-                      {isMath ? <MathHtml html={opt.text} block={false} /> : <RichText>{opt.text}</RichText>}
-                    </span>
-                  </button>
+                      <span
+                        className={cn(
+                          'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[13px] font-bold transition-colors',
+                          st.result
+                            ? isCorrect
+                              ? 'border-[#2F855A] bg-[#2F855A] text-white'
+                              : isWrongPick
+                                ? 'border-[#C2415A] bg-[#C2415A] text-white'
+                                : 'border-[#CFC7B4] text-[#6B6559]'
+                            : isSel
+                              ? 'border-[#3B5BDB] bg-[#3B5BDB] text-white'
+                              : 'border-[#CFC7B4] text-[#6B6559] group-hover:border-[#A9A08B]',
+                        )}
+                      >
+                        {opt.letter}
+                      </span>
+                      <span className={cn('qb-reading flex-1 text-[#2E2A23]', isStruck && !st.result && 'line-through')}>
+                        {isMath ? <MathHtml html={opt.text} block={false} /> : <RichText>{opt.text}</RichText>}
+                      </span>
+                    </button>
+
+                    {/* Subtle per-choice eliminator, shown when the toggle is on. */}
+                    {eliminating && !st.result && (
+                      <button
+                        onClick={() => toggleStrike(opt.letter)}
+                        aria-label={`${isStruck ? 'Restore' : 'Cross out'} choice ${opt.letter}`}
+                        aria-pressed={isStruck}
+                        title={isStruck ? 'Restore answer' : 'Cross out answer'}
+                        className={cn(
+                          'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3B5BDB]',
+                          isStruck
+                            ? 'border-[#6B6559] bg-[#6B6559] text-white'
+                            : 'border-transparent text-[#B0A891] hover:border-[#CFC7B4] hover:text-[#6B6559]',
+                        )}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
+                          <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>

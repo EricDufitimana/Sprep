@@ -156,14 +156,17 @@ export const vocabularyRouter = createTRPCRouter({
    *   • 'piece'   — "Which root means 'speak'?"       (options are morphemes)
    * The correct option is never marked; gradeMc re-derives it.
    */
-  mcQuestion: protectedProcedure.query(async ({ ctx }) => {
-    const rows = await loadMorphemes(ctx.supabase);
+  mcQuestion: protectedProcedure
+    .input(z.object({ kind: z.enum(['meaning', 'piece']).optional(), type: z.enum(['prefix', 'root', 'suffix']).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+    const all = await loadMorphemes(ctx.supabase);
+    const rows = input?.type ? all.filter((r) => r.type === input.type) : all;
     if (rows.length < 4) {
       throw new TRPCError({ code: 'NOT_FOUND', message: 'Not enough morphemes seeded yet' });
     }
 
     const target = pick(rows);
-    const kind: 'meaning' | 'piece' = Math.random() < 0.5 ? 'meaning' : 'piece';
+    const kind: 'meaning' | 'piece' = input?.kind ?? (Math.random() < 0.5 ? 'meaning' : 'piece');
 
     if (kind === 'meaning') {
       const options = shuffle([
@@ -558,7 +561,16 @@ export const vocabularyRouter = createTRPCRouter({
    * cards, then ones still in progress, with learned cards last.
    */
   flashcardDeck: protectedProcedure
-    .input(z.object({ group: z.string().optional() }).optional())
+    .input(
+      z
+        .object({
+          group: z.string().optional(),
+          type: z.enum(['prefix', 'root', 'suffix']).optional(),
+          // 'missed' = only the ones marked "still learning" (seen, not learned).
+          mode: z.enum(['all', 'missed']).default('all'),
+        })
+        .optional(),
+    )
     .query(async ({ ctx, input }) => {
       const rows = await loadMorphemes(ctx.supabase);
       const { data: stateData, error } = await ctx.supabase
@@ -571,9 +583,11 @@ export const vocabularyRouter = createTRPCRouter({
 
       const stateById = new Map((stateData ?? []).map((s) => [s.morpheme_id as string, s]));
       const now = Date.now();
-      const filtered = input?.group ? rows.filter((m) => m.meaning_group === input.group) : rows;
+      let filtered = rows;
+      if (input?.group) filtered = filtered.filter((m) => m.meaning_group === input.group);
+      if (input?.type) filtered = filtered.filter((m) => m.type === input.type);
 
-      const cards = filtered.map((m) => {
+      let cards = filtered.map((m) => {
         const st = stateById.get(m.id);
         return {
           id: m.id,
@@ -589,6 +603,11 @@ export const vocabularyRouter = createTRPCRouter({
           due: st ? new Date(st.due_at as string).getTime() <= now : true,
         };
       });
+
+      // "Review the ones you didn't know": seen but not yet learned.
+      if (input?.mode === 'missed') {
+        cards = cards.filter((c) => c.seen && !c.learned);
+      }
 
       // due-unlearned (0) → unseen (1) → in-progress (2) → learned (3)
       const rank = (c: (typeof cards)[number]) => (c.learned ? 3 : !c.seen ? 1 : c.due ? 0 : 2);

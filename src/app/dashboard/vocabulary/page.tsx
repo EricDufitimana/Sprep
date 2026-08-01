@@ -15,6 +15,7 @@ import { DecodeTrainer } from '@/components/vocab/decode-trainer';
 import { FreeResponseExercise } from '@/components/vocab/free-response-exercise';
 import { SentenceCompletionExercise } from '@/components/vocab/sentence-completion';
 import { FlashcardDeck } from '@/components/vocab/flashcard-deck';
+import { MorphemeQuiz } from '@/components/vocab/morpheme-quiz';
 import {
   GROUP_ORDER,
   EXERCISE_LABEL,
@@ -26,7 +27,7 @@ import {
 
 type TopTab = 'learn' | 'practice' | 'progress';
 type PracticeTab = 'trainer' | 'context' | 'free';
-type LearnMode = 'browse' | 'flashcards';
+type LearnMode = 'browse' | 'flashcards' | 'quiz';
 
 const TOP_TABS = [
   { value: 'learn', label: 'Learn' },
@@ -42,7 +43,8 @@ const PRACTICE_TABS = [
 
 const LEARN_TABS = [
   { value: 'browse', label: 'Browse' },
-  { value: 'flashcards', label: 'Flashcards' },
+  { value: 'flashcards', label: '1 · Flashcards' },
+  { value: 'quiz', label: '2 · Quiz' },
 ] as const;
 
 const TYPE_RANK: Record<string, number> = { prefix: 0, root: 1, suffix: 2 };
@@ -83,7 +85,11 @@ export default function VocabularyPage() {
 
           {learnMode === 'flashcards' ? (
             <div className="mx-auto max-w-2xl">
-              <FlashcardDeck />
+              <FlashcardDeck onContinue={() => setLearnMode('quiz')} />
+            </div>
+          ) : learnMode === 'quiz' ? (
+            <div className="mx-auto max-w-2xl">
+              <MorphemeQuiz />
             </div>
           ) : morphemes.isLoading ? (
             <div className="h-96 animate-pulse rounded-card border border-line bg-sunken/50" />

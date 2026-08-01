@@ -10,26 +10,45 @@ import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Reveal } from '@/components/reveal';
+import { cn } from '@/lib/utils';
 import { ExerciseError } from './exercise-parts';
 
 const CHARGE_TONE: Record<string, BadgeTone> = { positive: 'green', negative: 'miss', neutral: 'blue' };
 
+type TypeFilter = 'all' | 'prefix' | 'root' | 'suffix';
+type Mode = 'all' | 'missed';
+
+const TYPE_CHIPS: { value: TypeFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'prefix', label: 'Prefixes' },
+  { value: 'root', label: 'Roots' },
+  { value: 'suffix', label: 'Suffixes' },
+];
+
 /**
- * Flashcards for the morpheme corpus. Flip a card to check yourself, then mark
- * "knew it" / "still learning" — the same Leitner scheme as the Decode Trainer,
- * so learned pieces settle and shaky ones keep coming back. The header tracks how
- * much of the corpus is learned overall.
+ * Part 1 of learning the morphemes: flashcards. See the piece, flip for its
+ * meaning, then self-mark — check (I know it) or cross (still learning). Marks
+ * are tracked with the same Leitner scheme as the Decode Trainer, so you can come
+ * back and drill just the ones you didn't know. When the deck is done it hands
+ * off to Part 2, the multiple-choice quiz.
  */
-export function FlashcardDeck() {
+export function FlashcardDeck({ onContinue }: { onContinue?: () => void }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
-  const deck = useQuery(trpc.vocabulary.flashcardDeck.queryOptions({}));
-  const progress = useQuery(trpc.vocabulary.morphemeProgress.queryOptions());
-
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
+  const [mode, setMode] = useState<Mode>('all');
   const [pos, setPos] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [session, setSession] = useState({ reviewed: 0, knew: 0 });
+
+  const deckInput = { type: typeFilter === 'all' ? undefined : typeFilter, mode };
+  const deck = useQuery({
+    ...trpc.vocabulary.flashcardDeck.queryOptions(deckInput),
+    // Don't reshuffle the deck out from under an in-progress session on refocus.
+    refetchOnWindowFocus: false,
+  });
+  const progress = useQuery(trpc.vocabulary.morphemeProgress.queryOptions());
 
   const review = useMutation(
     trpc.vocabulary.reviewFlashcard.mutationOptions({
@@ -39,10 +58,20 @@ export function FlashcardDeck() {
     }),
   );
 
-  const restart = () => {
+  const resetSession = () => {
     setPos(0);
     setFlipped(false);
     setSession({ reviewed: 0, knew: 0 });
+  };
+
+  const switchTo = (next: Partial<{ type: TypeFilter; mode: Mode }>) => {
+    if (next.type !== undefined) setTypeFilter(next.type);
+    if (next.mode !== undefined) setMode(next.mode);
+    resetSession();
+  };
+
+  const restart = () => {
+    resetSession();
     void deck.refetch();
   };
 
@@ -54,40 +83,110 @@ export function FlashcardDeck() {
   }
 
   const cards = deck.data;
-  if (cards.length === 0) {
-    return (
-      <EmptyState
-        icon="book"
-        title="No morphemes to study yet"
-        description="Run the vocabulary seed to load the roots, prefixes, and suffixes."
-        action={<span className="text-small text-ink-400">npm run seed:vocab</span>}
-      />
-    );
-  }
-
   const p = progress.data;
   const learnedPct = p && p.total > 0 ? Math.round((p.learned / p.total) * 100) : 0;
+  const missedCount = p ? Math.max(0, p.seen - p.learned) : 0;
+
+  const typeChips = (
+    <div className="flex flex-wrap items-center justify-center gap-1.5">
+      {TYPE_CHIPS.map((c) => (
+        <button
+          key={c.value}
+          onClick={() => switchTo({ type: c.value, mode: 'all' })}
+          aria-pressed={typeFilter === c.value && mode === 'all'}
+          className={cn(
+            'rounded-pill border px-3 py-1 text-small transition-colors',
+            typeFilter === c.value && mode === 'all'
+              ? 'border-blue bg-blue-tint text-ink-900'
+              : 'border-line text-ink-600 hover:border-ink-400/40',
+          )}
+        >
+          {c.label}
+        </button>
+      ))}
+      <button
+        onClick={() => switchTo({ mode: 'missed' })}
+        aria-pressed={mode === 'missed'}
+        disabled={missedCount === 0}
+        className={cn(
+          'rounded-pill border px-3 py-1 text-small transition-colors disabled:cursor-default disabled:opacity-40',
+          mode === 'missed' ? 'border-amber bg-amber-tint text-ink-900' : 'border-line text-ink-600 hover:border-ink-400/40',
+        )}
+      >
+        Review missed{missedCount > 0 ? ` (${missedCount})` : ''}
+      </button>
+    </div>
+  );
+
+  const header = (
+    <div className="space-y-3">
+      <LearnedHeader learned={p?.learned ?? 0} total={p?.total ?? cards.length} pct={learnedPct} />
+      {typeChips}
+    </div>
+  );
+
+  // ── Empty (e.g. "Review missed" with nothing outstanding) ──
+  if (cards.length === 0) {
+    return (
+      <div className="space-y-5">
+        {header}
+        <EmptyState
+          icon="checkmark-circle"
+          title={mode === 'missed' ? 'Nothing to review' : 'No cards here'}
+          description={
+            mode === 'missed'
+              ? "You're not carrying any 'still learning' cards in this set — nice."
+              : 'No morphemes match this filter yet.'
+          }
+          action={
+            onContinue ? (
+              <Button onClick={onContinue}>
+                Go to the quiz
+                <Icon name="arrow-right" className="text-small" />
+              </Button>
+            ) : (
+              <span className="text-small text-ink-400">Pick another set above</span>
+            )
+          }
+        />
+      </div>
+    );
+  }
 
   // ── Session complete ──
   if (pos >= cards.length) {
     return (
       <div className="space-y-5">
-        <LearnedHeader learned={p?.learned ?? 0} total={p?.total ?? cards.length} pct={learnedPct} />
+        {header}
         <Card>
           <CardBody className="space-y-4 text-center">
             <Icon name="checkmark-circle" className="mx-auto text-h1 text-green" label="Done" />
             <div>
-              <h3 className="text-h3 font-semibold text-ink-900">Deck complete</h3>
+              <h3 className="text-h3 font-semibold text-ink-900">
+                {mode === 'missed' ? 'Review complete' : 'Deck complete'}
+              </h3>
               <p className="text-small text-ink-500">
                 You reviewed {session.reviewed} card{session.reviewed === 1 ? '' : 's'} and knew{' '}
                 <span className="font-medium text-ink-700">{session.knew}</span> of them.
               </p>
             </div>
-            <div className="flex justify-center">
-              <Button onClick={restart}>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {mode === 'all' && missedCount > 0 && (
+                <Button onClick={() => switchTo({ mode: 'missed' })}>
+                  <Icon name="reload" className="text-small" />
+                  Review the {missedCount} you didn&apos;t know
+                </Button>
+              )}
+              <Button variant={mode === 'all' && missedCount > 0 ? 'ghost' : 'primary'} onClick={restart}>
                 <Icon name="reload" className="text-small" />
                 Study again
               </Button>
+              {onContinue && (
+                <Button variant="ghost" onClick={onContinue}>
+                  Multiple-choice quiz
+                  <Icon name="arrow-right" className="text-small" />
+                </Button>
+              )}
             </div>
           </CardBody>
         </Card>
@@ -105,7 +204,7 @@ export function FlashcardDeck() {
 
   return (
     <div className="space-y-5">
-      <LearnedHeader learned={p?.learned ?? 0} total={p?.total ?? cards.length} pct={learnedPct} />
+      {header}
 
       <div className="flex items-center justify-between text-small text-ink-500">
         <span className="tabular-nums">
@@ -158,7 +257,7 @@ export function FlashcardDeck() {
 
                 <div className="grid grid-cols-2 gap-3 pt-1">
                   <Button variant="ghost" disabled={review.isPending} onClick={() => answer(false)}>
-                    <Icon name="reload" className="text-small" />
+                    <Icon name="cross-circle" className="text-small text-miss" />
                     Still learning
                   </Button>
                   <Button disabled={review.isPending} onClick={() => answer(true)}>
