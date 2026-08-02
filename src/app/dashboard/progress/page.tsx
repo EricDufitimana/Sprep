@@ -14,23 +14,29 @@ import { color } from '@/lib/tokens';
 import { cn } from '@/lib/utils';
 import { accuracyTone, domainLabel, formatDate } from '@/lib/labels';
 import { diagnosisLabel } from '@/lib/diagnosis';
+import { useSection, SECTION_LABELS, type Section } from '@/lib/section';
 
 type Analytics = NonNullable<ReturnType<typeof useAnalytics>['data']>;
-function useAnalytics() {
+function useAnalytics(section: Section, ready: boolean) {
   const trpc = useTRPC();
-  return useQuery(trpc.progress.analytics.queryOptions());
+  return useQuery({ ...trpc.progress.analytics.queryOptions({ section }), enabled: ready });
 }
+
+/** Short section tag for score labels (the SAT scores each section 200–800). */
+const sectionTag = (s: Section) => (s === 'math' ? 'Math' : 'R&W');
 
 const DIFF_LABEL: Record<string, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
 
 export default function ProgressPage() {
   const router = useRouter();
-  const q = useAnalytics();
+  const { section, ready } = useSection();
+  const q = useAnalytics(section, ready);
+  const headerDescription = `${SECTION_LABELS[section]} — your estimated score, where the points are, and whether you're on pace.`;
 
-  if (q.isLoading) {
+  if (!ready || q.isLoading) {
     return (
       <>
-        <PageHeader title="Progress" description="Your estimated score, where the points are, and whether you're on pace." />
+        <PageHeader title="Progress" description={headerDescription} />
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="h-48 animate-pulse rounded-card bg-sunken/60 lg:col-span-2" />
           <div className="h-48 animate-pulse rounded-card bg-sunken/60" />
@@ -43,7 +49,7 @@ export default function ProgressPage() {
   if (!data || data.totals.answered === 0) {
     return (
       <>
-        <PageHeader title="Progress" description="Your estimated score, where the points are, and whether you're on pace." />
+        <PageHeader title="Progress" description={headerDescription} />
         <EmptyState
           icon="bar-chart"
           title="Nothing to analyze yet"
@@ -61,7 +67,7 @@ export default function ProgressPage() {
 
   return (
     <>
-      <PageHeader title="Progress" description="Your estimated score, where the points are, and whether you're on pace.">
+      <PageHeader title="Progress" description={headerDescription}>
         <Button variant="ghost" onClick={() => router.push('/dashboard/practice')}>
           Practice
           <Icon name="arrow-right" className="text-small" />
@@ -79,7 +85,7 @@ export default function ProgressPage() {
         <Card>
           <CardHeader>
             <CardTitle>Estimated score over time</CardTitle>
-            <span className="text-micro text-ink-400">R&amp;W · 200–800</span>
+            <span className="text-micro text-ink-400">{sectionTag(data.section)} · 200–800</span>
           </CardHeader>
           <CardBody>
             <TrendChart data={data} />
@@ -137,7 +143,7 @@ function ScoreHero({ data, className }: { data: Analytics; className?: string })
       <CardBody className="flex h-full flex-col justify-between gap-6 sm:flex-row sm:items-center">
         <div>
           <div className="flex items-center gap-2">
-            <p className="text-small font-medium text-ink-500">Estimated R&amp;W score</p>
+            <p className="text-small font-medium text-ink-500">Estimated {sectionTag(data.section)} score</p>
             <span className="rounded-pill bg-blue-tint px-2 py-0.5 text-micro font-medium text-blue">estimate</span>
           </div>
           {s ? (

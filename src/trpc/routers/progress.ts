@@ -11,6 +11,7 @@ import {
   DSAT_DOMAIN_WEIGHTS,
   DSAT_MODULE_QUESTIONS,
   MATH_DOMAIN_WEIGHTS,
+  MATH_MODULE_QUESTIONS,
   domainOrderFor,
 } from '@/lib/dsat';
 import { sectionSchema } from '@/lib/validation';
@@ -22,8 +23,13 @@ function weightsFor(section: 'reading_writing' | 'math'): Record<string, number>
   return section === 'math' ? MATH_DOMAIN_WEIGHTS : DSAT_DOMAIN_WEIGHTS;
 }
 
-/** Per-question time budget on the digital SAT R&W (32 min / 27 questions). */
-const BUDGET_SECONDS = Math.round((32 * 60) / DSAT_MODULE_QUESTIONS);
+/** Per-question time budget: the section's module time over its question count.
+ *  R&W ≈ 32 min / 27 ≈ 71s; Math ≈ 35 min / 22 ≈ 95s. */
+function budgetSecondsFor(section: 'reading_writing' | 'math'): number {
+  return section === 'math'
+    ? Math.round((35 * 60) / MATH_MODULE_QUESTIONS)
+    : Math.round((32 * 60) / DSAT_MODULE_QUESTIONS);
+}
 /** Below this, a miss reads as a rush/careless slip rather than a knowledge gap. */
 const CARELESS_SECONDS = 25;
 /** Above this a recorded time is idle/tab-left-open, not real thinking time. */
@@ -282,7 +288,13 @@ export const progressRouter = createTRPCRouter({
    * Everything is derived here so the client just renders. The scaled score is
    * an ESTIMATE — see utils/scaled-score.ts for the model and its caveats.
    */
-  analytics: protectedProcedure.query(async ({ ctx }) => {
+  analytics: protectedProcedure
+    .input(z.object({ section: sectionSchema.default('reading_writing') }).optional())
+    .query(async ({ ctx, input }) => {
+    const section = input?.section ?? 'reading_writing';
+    const weights = weightsFor(section);
+    const sectionDomains = new Set(domainOrderFor(section));
+    const budgetSeconds = budgetSecondsFor(section);
     const [rows, attempts, profileRes] = await Promise.all([
       fetchAllRows<AnalyticsRow>(
         (from, to) =>
@@ -314,22 +326,32 @@ export const progressRouter = createTRPCRouter({
     }[];
     const profile = (profileRes.data ?? null) as { target_score: number | null; test_date: string | null } | null;
 
-    // Only answered rows drive accuracy; blanks are not evidence of weakness.
-    const answered = rows.filter((r) => r.selected_answer !== null);
+    // Only answered rows in the chosen section drive its stats; blanks aren't
+    // evidence of weakness, and other-section rows belong to the other view.
+    const answered = rows.filter(
+      (r) =>
+        r.selected_answer !== null &&
+        r.questions?.domain != null &&
+        sectionDomains.has(r.questions.domain),
+    );
     const wrong = answered.filter((r) => r.is_correct !== true);
     const withDiff = answered.filter((r) => r.questions?.difficulty != null);
 
     // ---- Domain-balanced scaled score + "reachable" ---------------------
     // Ability is estimated per domain and combined by each domain's official SAT
     // share, so an uneven practice mix doesn't skew the section estimate.
-    const estimate = estimateWeightedScaledScore(toDomainGroups(answered, (r) => r.is_correct === true));
+    const estimate = estimateWeightedScaledScore(toDomainGroups(answered, (r) => r.is_correct === true, weights));
 
     const reachable = estimateWeightedScaledScore(
-      toDomainGroups(answered, (r) => {
-        if (r.is_correct === true) return true;
-        const secs = r.time_spent_ms != null ? r.time_spent_ms / 1000 : null;
-        return r.questions!.difficulty === 'easy' || (secs != null && secs < CARELESS_SECONDS);
-      }),
+      toDomainGroups(
+        answered,
+        (r) => {
+          if (r.is_correct === true) return true;
+          const secs = r.time_spent_ms != null ? r.time_spent_ms / 1000 : null;
+          return r.questions!.difficulty === 'easy' || (secs != null && secs < CARELESS_SECONDS);
+        },
+        weights,
+      ),
     );
     const scaledScore = estimate
       ? {
@@ -354,7 +376,7 @@ export const progressRouter = createTRPCRouter({
       rowsByAttempt.set(r.attempt_id, list);
     }
     const trend = attemptRows.map((a) => {
-      const est = estimateWeightedScaledScore(toDomainGroups(rowsByAttempt.get(a.id) ?? [], (r) => r.is_correct === true));
+      const est = estimateWeightedScaledScore(toDomainGroups(rowsByAttempt.get(a.id) ?? [], (r) => r.is_correct === true, weights));
       return {
         attemptId: a.id,
         submittedAt: a.submitted_at,
@@ -473,7 +495,7 @@ export const progressRouter = createTRPCRouter({
       pacing = {
         avgSeconds: Math.round(avg),
         medianSeconds: Math.round(median),
-        budgetSeconds: BUDGET_SECONDS,
+        budgetSeconds,
         sampleSize: timed.length,
         buckets,
         byType,
@@ -507,17 +529,18 @@ export const progressRouter = createTRPCRouter({
       if (d) domainCounts.set(d, (domainCounts.get(d) ?? 0) + 1);
     }
     const totalDomainAnswered = Array.from(domainCounts.values()).reduce((s, n) => s + n, 0);
-    const practiceMix = (Object.keys(DSAT_DOMAIN_WEIGHTS) as (keyof typeof DSAT_DOMAIN_WEIGHTS)[]).map((domain) => {
+    const practiceMix = Object.keys(weights).map((domain) => {
       const count = domainCounts.get(domain) ?? 0;
       return {
         domain,
         answered: count,
         share: totalDomainAnswered === 0 ? 0 : Math.round((count / totalDomainAnswered) * 1000) / 10,
-        targetShare: Math.round(DSAT_DOMAIN_WEIGHTS[domain] * 1000) / 10,
+        targetShare: Math.round(weights[domain] * 1000) / 10,
       };
     });
 
     return {
+      section,
       scaledScore,
       target: target != null || testDate ? { targetScore: target, testDate: profile?.test_date ?? null } : null,
       projection,
