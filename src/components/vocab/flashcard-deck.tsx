@@ -16,7 +16,7 @@ import { ExerciseError } from './exercise-parts';
 const CHARGE_TONE: Record<string, BadgeTone> = { positive: 'green', negative: 'miss', neutral: 'blue' };
 
 type TypeFilter = 'all' | 'prefix' | 'root' | 'suffix';
-type Mode = 'all' | 'missed';
+type Mode = 'all' | 'missed' | 'learned';
 
 interface MorphemeProgress {
   total: number;
@@ -35,9 +35,11 @@ const TYPE_CHIPS: { value: TypeFilter; label: string }[] = [
 /**
  * Part 1 of learning the morphemes: flashcards. See the piece, flip for its
  * meaning, then self-mark — check (I know it) or cross (still learning). Marks
- * are tracked with the same Leitner scheme as the Decode Trainer, so you can come
- * back and drill just the ones you didn't know. When the deck is done it hands
- * off to Part 2, the multiple-choice quiz.
+ * are tracked with the same Leitner scheme as the Decode Trainer and persist per
+ * user, so the deck is only ever the pieces you HAVEN'T learned yet: leave
+ * mid-deck and come back, and you resume with exactly what's left rather than
+ * from the top. "Review learned" brings finished cards back for a refresher.
+ * When the deck is done it hands off to Part 2, the multiple-choice quiz.
  */
 export function FlashcardDeck({ onContinue }: { onContinue?: () => void }) {
   const trpc = useTRPC();
@@ -116,6 +118,8 @@ export function FlashcardDeck({ onContinue }: { onContinue?: () => void }) {
   const p = progress.data;
   const learnedPct = p && p.total > 0 ? Math.round((p.learned / p.total) * 100) : 0;
   const missedCount = p ? Math.max(0, p.seen - p.learned) : 0;
+  const learnedCount = p?.learned ?? 0;
+  const remainingCount = p ? Math.max(0, p.total - p.learned) : cards.length;
 
   const typeChips = (
     <div className="flex flex-wrap items-center justify-center gap-1.5">
@@ -145,38 +149,71 @@ export function FlashcardDeck({ onContinue }: { onContinue?: () => void }) {
       >
         Review missed{missedCount > 0 ? ` (${missedCount})` : ''}
       </button>
+      <button
+        onClick={() => switchTo({ mode: 'learned' })}
+        aria-pressed={mode === 'learned'}
+        disabled={learnedCount === 0}
+        className={cn(
+          'rounded-pill border px-3 py-1 text-small transition-colors disabled:cursor-default disabled:opacity-40',
+          mode === 'learned' ? 'border-green bg-green-tint text-ink-900' : 'border-line text-ink-600 hover:border-ink-400/40',
+        )}
+      >
+        Review learned{learnedCount > 0 ? ` (${learnedCount})` : ''}
+      </button>
     </div>
   );
 
   const header = (
     <div className="space-y-3">
-      <LearnedHeader learned={p?.learned ?? 0} total={p?.total ?? cards.length} pct={learnedPct} />
+      <LearnedHeader
+        learned={p?.learned ?? 0}
+        total={p?.total ?? cards.length}
+        pct={learnedPct}
+        remaining={remainingCount}
+      />
       {typeChips}
     </div>
   );
 
-  // ── Empty (e.g. "Review missed" with nothing outstanding) ──
+  // ── Empty ──
+  // 'all' with nothing left means every card in this set is learned — a finish
+  // line, not an error. 'missed'/'learned' empties are their own nothing-here copy.
   if (cards.length === 0) {
+    const allLearned = mode === 'all' && learnedCount > 0;
     return (
       <div className="space-y-5">
         {header}
         <EmptyState
           icon="checkmark-circle"
-          title={mode === 'missed' ? 'Nothing to review' : 'No cards here'}
+          title={
+            mode === 'missed' ? 'Nothing to review' : mode === 'learned' ? 'Nothing learned yet' : allLearned ? 'All caught up' : 'No cards here'
+          }
           description={
             mode === 'missed'
               ? "You're not carrying any 'still learning' cards in this set — nice."
-              : 'No morphemes match this filter yet.'
+              : mode === 'learned'
+                ? 'Mark a few cards "I knew it" and they collect here for refreshers.'
+                : allLearned
+                  ? "You've learned every morpheme in this set. Come back anytime to review."
+                  : 'No morphemes match this filter yet.'
           }
           action={
-            onContinue ? (
-              <Button onClick={onContinue}>
-                Go to the quiz
-                <Icon name="arrow-right" className="text-small" />
-              </Button>
-            ) : (
-              <span className="text-small text-ink-400">Pick another set above</span>
-            )
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {allLearned && (
+                <Button variant="ghost" onClick={() => switchTo({ mode: 'learned' })}>
+                  <Icon name="reload" className="text-small" />
+                  Review learned
+                </Button>
+              )}
+              {onContinue ? (
+                <Button onClick={onContinue}>
+                  Go to the quiz
+                  <Icon name="arrow-right" className="text-small" />
+                </Button>
+              ) : (
+                !allLearned && <span className="text-small text-ink-400">Pick another set above</span>
+              )}
+            </div>
           }
         />
       </div>
@@ -193,7 +230,7 @@ export function FlashcardDeck({ onContinue }: { onContinue?: () => void }) {
             <Icon name="checkmark-circle" className="mx-auto text-h1 text-green" label="Done" />
             <div>
               <h3 className="text-h3 font-semibold text-ink-900">
-                {mode === 'missed' ? 'Review complete' : 'Deck complete'}
+                {mode === 'missed' ? 'Review complete' : mode === 'learned' ? 'Refresher complete' : 'Deck complete'}
               </h3>
               <p className="text-small text-ink-500">
                 You reviewed {session.reviewed} card{session.reviewed === 1 ? '' : 's'} and knew{' '}
@@ -240,6 +277,7 @@ export function FlashcardDeck({ onContinue }: { onContinue?: () => void }) {
       <div className="flex items-center justify-between text-small text-ink-500">
         <span className="tabular-nums">
           Card {pos + 1} of {cards.length}
+          {mode === 'all' ? ' left' : mode === 'learned' ? ' learned' : ''}
         </span>
         <div className="flex items-center gap-2">
           {card.learned && <Badge tone="green">learned</Badge>}
@@ -305,7 +343,17 @@ export function FlashcardDeck({ onContinue }: { onContinue?: () => void }) {
   );
 }
 
-function LearnedHeader({ learned, total, pct }: { learned: number; total: number; pct: number }) {
+function LearnedHeader({
+  learned,
+  total,
+  pct,
+  remaining,
+}: {
+  learned: number;
+  total: number;
+  pct: number;
+  remaining: number;
+}) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between">
@@ -315,6 +363,13 @@ function LearnedHeader({ learned, total, pct }: { learned: number; total: number
         </p>
       </div>
       <ProgressBar value={pct} tone={pct >= 80 ? 'green' : pct >= 40 ? 'amber' : 'blue'} label="Morphemes learned" />
+      <p className="text-micro text-ink-400">
+        {remaining > 0
+          ? `${remaining} left to learn — you'll pick up right where you stopped.`
+          : total > 0
+            ? 'Every morpheme learned. Nice.'
+            : ''}
+      </p>
     </div>
   );
 }

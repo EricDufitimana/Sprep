@@ -557,7 +557,12 @@ export const vocabularyRouter = createTRPCRouter({
   /**
    * The flashcard deck: every shared morpheme joined with this user's private
    * review state, ordered for study — cards due for review first, then never-seen
-   * cards, then ones still in progress, with learned cards last.
+   * cards, then ones still in progress.
+   *
+   * By default the deck is only what's LEFT to learn: cards you've already marked
+   * "I knew it" (learned) drop out, so every session picks up exactly where you
+   * stopped and the deck shrinks toward zero instead of restarting from the top.
+   * `mode: 'learned'` brings the finished cards back for a refresher.
    */
   flashcardDeck: protectedProcedure
     .input(
@@ -565,8 +570,10 @@ export const vocabularyRouter = createTRPCRouter({
         .object({
           group: z.string().optional(),
           type: z.enum(['prefix', 'root', 'suffix']).optional(),
-          // 'missed' = only the ones marked "still learning" (seen, not learned).
-          mode: z.enum(['all', 'missed']).default('all'),
+          // 'all'     = everything still to learn (learned cards excluded)
+          // 'missed'  = only the ones marked "still learning" (seen, not learned)
+          // 'learned' = only the finished cards, for a refresher
+          mode: z.enum(['all', 'missed', 'learned']).default('all'),
         })
         .optional(),
     )
@@ -603,9 +610,17 @@ export const vocabularyRouter = createTRPCRouter({
         };
       });
 
-      // "Review the ones you didn't know": seen but not yet learned.
-      if (input?.mode === 'missed') {
+      const mode = input?.mode ?? 'all';
+      if (mode === 'missed') {
+        // "Review the ones you didn't know": seen but not yet learned.
         cards = cards.filter((c) => c.seen && !c.learned);
+      } else if (mode === 'learned') {
+        // Refresher over the cards you've already finished.
+        cards = cards.filter((c) => c.learned);
+      } else {
+        // Default study deck = what's left to learn. Learned cards drop out so
+        // returning to the deck resumes with the remaining pieces, not the top.
+        cards = cards.filter((c) => !c.learned);
       }
 
       // due-unlearned (0) → unseen (1) → in-progress (2) → learned (3)

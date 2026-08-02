@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
 import { QuestionFigure } from '@/components/question-figure';
 import { MathHtml } from '@/components/math-html';
+import { DesmosCalculator } from '@/components/desmos-calculator';
 import { cn } from '@/lib/utils';
 import { domainLabel } from '@/lib/labels';
 import { useSection } from '@/lib/section';
@@ -644,6 +645,24 @@ function Taker({
   const [eliminating, setEliminating] = useState(false);
   const [struck, setStruck] = useState<Record<string, string[]>>({});
 
+  // Desmos panel — Bluebook's math calculator. Open/closed is remembered, and
+  // the graph itself persists (in DesmosCalculator), so it's there when you
+  // come back to it across questions and sessions.
+  const [calcOpen, setCalcOpen] = useState(false);
+  useEffect(() => {
+    setCalcOpen(localStorage.getItem('desmos-open:qbank') === '1');
+  }, []);
+  const toggleCalc = () =>
+    setCalcOpen((o) => {
+      const next = !o;
+      try {
+        localStorage.setItem('desmos-open:qbank', next ? '1' : '0');
+      } catch {
+        /* storage blocked — non-fatal */
+      }
+      return next;
+    });
+
   // Per-question count-up: the ref marks when the current question came on
   // screen; a low-frequency tick just forces the clock to re-render.
   const startedAtRef = useRef<number>(Date.now());
@@ -838,6 +857,20 @@ function Taker({
         </div>
 
         <div className="flex items-center gap-4">
+          {isMath && (
+            <button
+              onClick={toggleCalc}
+              aria-pressed={calcOpen}
+              title={calcOpen ? 'Hide calculator' : 'Show graphing calculator'}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md text-[12px] hover:text-[#6B6559]',
+                calcOpen ? 'text-[#3B5BDB]' : 'text-[#9A9280]',
+              )}
+            >
+              <span aria-hidden className="text-[14px] leading-none">🖩</span>
+              Calculator
+            </button>
+          )}
           {/* "More" menu — houses the optional difficulty reveal. */}
           <div className="relative" ref={menuRef}>
             <button
@@ -911,8 +944,21 @@ function Taker({
         </div>
       </header>
 
-      {/* Split panes — single column for math (the stem is self-contained). */}
-      <main className={cn('grid min-h-0 flex-1 grid-cols-1', !isMath && 'md:grid-cols-2')}>
+      {/* Split panes — R&W: passage | question. Math: single column, or
+          calculator | question when the Desmos panel is open. */}
+      <main
+        className={cn(
+          'grid min-h-0 flex-1 grid-cols-1',
+          (!isMath || (isMath && calcOpen)) && 'md:grid-cols-2',
+        )}
+      >
+        {/* Left (math): the graphing calculator, its own half of the screen. */}
+        {isMath && calcOpen && (
+          <section className="min-h-0 border-[#ECE6DA] md:border-r">
+            <DesmosCalculator storageKey="desmos:qbank" className="h-full w-full" />
+          </section>
+        )}
+
         {/* Left: passage / figure — R&W only. */}
         {!isMath && (
         <section className="min-h-0 overflow-y-auto border-[#ECE6DA] px-8 py-8 md:border-r md:px-10">

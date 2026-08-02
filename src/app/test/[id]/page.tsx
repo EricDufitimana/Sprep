@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { QuestionFigure } from '@/components/question-figure';
 import { RichText } from '@/components/rich-text';
 import { MathHtml } from '@/components/math-html';
+import { DesmosCalculator } from '@/components/desmos-calculator';
 
 /**
  * The sitting screen, styled to mimic Bluebook — the real digital SAT app.
@@ -52,7 +53,25 @@ export default function TestPage() {
   const [remaining, setRemaining] = useState<number | null>(null);
   const [timerHidden, setTimerHidden] = useState(false);
   const [exiting, setExiting] = useState(false);
+  // Desmos panel — like Bluebook's math calculator. Its open/closed choice is
+  // remembered per sitting so reopening the test brings the panel back as it was.
+  const [calcOpen, setCalcOpen] = useState(false);
   const startedAt = useRef<number>(Date.now());
+
+  useEffect(() => {
+    setCalcOpen(localStorage.getItem(`desmos-open:${attemptId}`) === '1');
+  }, [attemptId]);
+
+  const toggleCalc = () =>
+    setCalcOpen((o) => {
+      const next = !o;
+      try {
+        localStorage.setItem(`desmos-open:${attemptId}`, next ? '1' : '0');
+      } catch {
+        /* storage blocked — non-fatal */
+      }
+      return next;
+    });
 
   // Per-question dwell time (ms), so pace can be computed later. `qStartedAt`
   // marks when the visible question came on screen; `timeByQuestion` holds the
@@ -280,6 +299,20 @@ export default function TestPage() {
         </div>
 
         <div className="flex items-center justify-end gap-5 text-[11px]">
+          {isMath && (
+            <button
+              onClick={toggleCalc}
+              aria-pressed={calcOpen}
+              title={calcOpen ? 'Hide calculator' : 'Show graphing calculator'}
+              className={cn(
+                'flex flex-col items-center gap-0.5 hover:opacity-70',
+                calcOpen && 'text-[#324DC7]',
+              )}
+            >
+              <span aria-hidden className="text-[15px] leading-none">🖩</span>
+              Calculator
+            </button>
+          )}
           <span className="flex flex-col items-center gap-0.5 opacity-50">
             <span aria-hidden className="text-[15px]">✎</span>
             Highlights &amp; Notes
@@ -309,8 +342,14 @@ export default function TestPage() {
           onClose={() => setReviewing(false)}
         />
       ) : (
-        /* ── Split panes (single column for math: the stem is self-contained) ── */
-        <main className={cn('grid min-h-0 flex-1 grid-cols-1', !isMath && 'md:grid-cols-2')}>
+        /* ── Split panes. R&W: passage | question. Math: single column, or
+              calculator | question when the Desmos panel is open. ── */
+        <main
+          className={cn(
+            'grid min-h-0 flex-1 grid-cols-1',
+            (!isMath || (isMath && calcOpen)) && 'md:grid-cols-2',
+          )}
+        >
           {/* Left: stimulus — R&W only; a math stem carries its own figure. */}
           {!isMath && (
           <section
@@ -329,8 +368,15 @@ export default function TestPage() {
           </section>
           )}
 
+          {/* Left (math): the graphing calculator, its own half of the screen. */}
+          {isMath && calcOpen && (
+            <section className="min-h-0 md:border-r" style={{ borderColor: '#6B7280' }}>
+              <DesmosCalculator storageKey={`desmos:test:${attemptId}`} className="h-full w-full" />
+            </section>
+          )}
+
           {/* Right: question + options (or, for math, the whole self-contained stem) */}
-          <section className={cn('min-h-0 overflow-y-auto px-8 py-6', isMath && 'mx-auto w-full max-w-3xl')}>
+          <section className={cn('min-h-0 overflow-y-auto px-8 py-6', isMath && !calcOpen && 'mx-auto w-full max-w-3xl')}>
             <div
               className="mb-4 flex items-center gap-3 px-1 py-1"
               style={{ backgroundColor: '#F1F2F7' }}
