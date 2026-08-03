@@ -58,11 +58,92 @@ export function MathHtml({
  * that can run code.
  */
 function sanitize(html: string): string {
-  return html
+  return expandMfenced(html)
     // Drop <script>/<style> and their contents outright.
     .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, '')
     // Drop inline event handlers: on…="…" / on…='…' / on…=bare.
     .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     // Neutralise javascript: in href / src / xlink:href.
     .replace(/((?:xlink:)?(?:href|src))\s*=\s*("|')\s*javascript:[^"']*\2/gi, '$1=$2#$2');
+}
+
+/**
+ * Rewrite MathML's deprecated `<mfenced>` to an explicit fenced `<mrow>`:
+ *
+ *   <mfenced><mi>x</mi></mfenced>  →  <mrow><mo>(</mo><mi>x</mi><mo>)</mo></mrow>
+ *
+ * Why: a big share of the stems wrap function arguments in `<mfenced>` (f(x)),
+ * but browsers' *native* MathML (Chrome's MathML Core) dropped `<mfenced>` — so
+ * before MathJax finishes typesetting, those render as "fx" with no parentheses,
+ * while explanations (which use explicit `<mo>(</mo>`) look right. Expanding it
+ * here makes the parentheses correct in BOTH the native fallback and MathJax,
+ * with no timing gap. Honors `open`/`close`/`separators` and nests inside-out.
+ */
+function expandMfenced(html: string): string {
+  if (html.indexOf('<mfenced') === -1) return html;
+  // Innermost first: match an <mfenced> whose body contains no nested <mfenced>.
+  const INNERMOST = /<mfenced\b([^>]*)>((?:(?!<mfenced\b)[\s\S])*?)<\/mfenced>/i;
+  let out = html;
+  for (let guard = 0; guard < 100 && INNERMOST.test(out); guard++) {
+    out = out.replace(INNERMOST, (_full, attrs: string, inner: string) => {
+      const open = readAttr(attrs, 'open', '(');
+      const close = readAttr(attrs, 'close', ')');
+      const seps = readAttr(attrs, 'separators', ',');
+      const kids = splitTopLevel(inner);
+      let body = '';
+      kids.forEach((kid, i) => {
+        if (i > 0 && seps) {
+          const sep = seps[Math.min(i - 1, seps.length - 1)];
+          if (sep && sep.trim()) body += `<mo>${escapeMathText(sep)}</mo>`;
+        }
+        body += kid;
+      });
+      const o = open ? `<mo>${escapeMathText(open)}</mo>` : '';
+      const c = close ? `<mo>${escapeMathText(close)}</mo>` : '';
+      return `<mrow>${o}${body}${c}</mrow>`;
+    });
+  }
+  return out;
+}
+
+/** Read one attribute value out of a raw tag-attribute string; fall back to `dflt`. */
+function readAttr(attrs: string, name: string, dflt: string): string {
+  const m = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, 'i').exec(attrs);
+  if (!m) return dflt;
+  return m[2] ?? m[3] ?? '';
+}
+
+/** Escape the few characters that matter when injecting a fence char into markup. */
+function escapeMathText(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Split a run of MathML into its top-level element children (mfenced's arguments),
+ * so separators can be placed between them. Depth-tracks tags; ignores stray text.
+ */
+function splitTopLevel(s: string): string[] {
+  const kids: string[] = [];
+  const tagRe = /<(\/?)([a-zA-Z][\w:-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
+  let depth = 0;
+  let start = -1;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(s))) {
+    const closing = m[1] === '/';
+    const selfClose = m[4] === '/';
+    if (selfClose) {
+      if (depth === 0) kids.push(s.slice(m.index, tagRe.lastIndex));
+    } else if (!closing) {
+      if (depth === 0) start = m.index;
+      depth++;
+    } else {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        kids.push(s.slice(start, tagRe.lastIndex));
+        start = -1;
+      }
+    }
+  }
+  // No element children (e.g. bare text like <mfenced>x</mfenced>) → keep as one.
+  return kids.length ? kids : [s];
 }
