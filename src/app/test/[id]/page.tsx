@@ -9,6 +9,7 @@ import { QuestionFigure } from '@/components/question-figure';
 import { RichText } from '@/components/rich-text';
 import { MathHtml } from '@/components/math-html';
 import { DesmosCalculator } from '@/components/desmos-calculator';
+import { SatReferenceSheet } from '@/components/sat-reference-sheet';
 
 /**
  * The sitting screen, styled to mimic Bluebook — the real digital SAT app.
@@ -52,6 +53,7 @@ export default function TestPage() {
   const [error, setError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [timerHidden, setTimerHidden] = useState(false);
+  const [refOpen, setRefOpen] = useState(false);
   const [exiting, setExiting] = useState(false);
   // Desmos panel — like Bluebook's math calculator. Its open/closed choice is
   // remembered per sitting so reopening the test brings the panel back as it was.
@@ -299,6 +301,16 @@ export default function TestPage() {
         </div>
 
         <div className="flex items-center justify-end gap-5 text-[11px]">
+          {isMath && (
+            <button
+              onClick={() => setRefOpen(true)}
+              title="SAT math reference sheet"
+              className="flex flex-col items-center gap-0.5 hover:opacity-70"
+            >
+              <span aria-hidden className="text-[15px] leading-none">📐</span>
+              Reference
+            </button>
+          )}
           {isMath && (
             <button
               onClick={toggleCalc}
@@ -589,6 +601,9 @@ export default function TestPage() {
           )}
         </div>
       </footer>
+
+      {/* SAT math reference sheet — opened from the header's "Reference". */}
+      <SatReferenceSheet open={refOpen} onClose={() => setRefOpen(false)} />
     </div>
   );
 }

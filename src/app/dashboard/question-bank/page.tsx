@@ -15,6 +15,7 @@ import { Modal } from '@/components/ui/modal';
 import { QuestionFigure } from '@/components/question-figure';
 import { MathHtml } from '@/components/math-html';
 import { DesmosCalculator } from '@/components/desmos-calculator';
+import { SatReferenceSheet } from '@/components/sat-reference-sheet';
 import { cn } from '@/lib/utils';
 import { domainLabel } from '@/lib/labels';
 import { useSection } from '@/lib/section';
@@ -663,6 +664,12 @@ function Taker({
       return next;
     });
 
+  // Reference sheet (math formulas) — opened from the header, like Bluebook.
+  const [refOpen, setRefOpen] = useState(false);
+  // Let the stopwatch be hidden so it isn't a distraction; the clock keeps
+  // running underneath, just not shown, and "Show" brings it back.
+  const [timerHidden, setTimerHidden] = useState(false);
+
   // Per-question count-up: the ref marks when the current question came on
   // screen; a low-frequency tick just forces the clock to re-render.
   const startedAtRef = useRef<number>(Date.now());
@@ -850,13 +857,33 @@ function Taker({
           <span className="hidden truncate text-[12px] text-[#6B6559] sm:inline">{scopeLabel}</span>
         </div>
 
-        {/* Per-question stopwatch */}
-        <div className="flex items-center gap-2 rounded-full border border-[#E4DECF] bg-[#FFFDF8] px-4 py-1.5">
-          <span className="h-2 w-2 rounded-full bg-[#3B5BDB]" />
-          <span className="text-[15px] font-semibold tabular-nums text-[#23201B]">{fmtClock(liveMs)}</span>
+        {/* Per-question stopwatch, with a hide/show toggle beneath it. */}
+        <div className="flex flex-col items-center gap-0.5">
+          <div className="flex items-center gap-2 rounded-full border border-[#E4DECF] bg-[#FFFDF8] px-4 py-1.5">
+            <span className="h-2 w-2 rounded-full bg-[#3B5BDB]" />
+            <span className="text-[15px] font-semibold tabular-nums text-[#23201B]">
+              {timerHidden ? '—:—' : fmtClock(liveMs)}
+            </span>
+          </div>
+          <button
+            onClick={() => setTimerHidden((h) => !h)}
+            className="rounded-full px-2 text-[11px] leading-4 text-[#9A9280] hover:text-[#6B6559]"
+          >
+            {timerHidden ? 'Show' : 'Hide'}
+          </button>
         </div>
 
         <div className="flex items-center gap-4">
+          {isMath && (
+            <button
+              onClick={() => setRefOpen(true)}
+              title="SAT math reference sheet"
+              className="flex items-center gap-1.5 rounded-md text-[12px] text-[#9A9280] hover:text-[#6B6559]"
+            >
+              <span aria-hidden className="text-[14px] leading-none">📐</span>
+              Reference
+            </button>
+          )}
           {isMath && (
             <button
               onClick={toggleCalc}
@@ -1237,6 +1264,9 @@ function Taker({
           }}
         />
       )}
+
+      {/* SAT math reference sheet — opened from the header's "Reference". */}
+      <SatReferenceSheet open={refOpen} onClose={() => setRefOpen(false)} />
     </div>
   );
 }
