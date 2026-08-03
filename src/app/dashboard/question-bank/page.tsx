@@ -1170,9 +1170,18 @@ function Taker({
                     <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[#B0A891]">
                       Explanation
                     </p>
-                    <p className="qb-reading whitespace-pre-line text-[#4A453B]">
-                      <RichText>{st.result.explanation}</RichText>
-                    </p>
+                    {/* Math explanations are rich HTML (MathML/figures); R&W is
+                        whitelisted text. Using <RichText> for math would leak raw
+                        <math>/<p>/<span> tags as literal text. */}
+                    {isMath ? (
+                      <div className="qb-reading text-[#4A453B]">
+                        <MathHtml html={st.result.explanation} />
+                      </div>
+                    ) : (
+                      <p className="qb-reading whitespace-pre-line text-[#4A453B]">
+                        <RichText>{st.result.explanation}</RichText>
+                      </p>
+                    )}
                   </div>
                 )}
               </div>

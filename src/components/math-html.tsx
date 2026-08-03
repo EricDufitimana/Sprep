@@ -1,13 +1,15 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, type RefObject } from 'react';
 import { cn } from '@/lib/utils';
+import { useTypesetMath } from '@/lib/mathjax';
 
 /**
  * Render a math question's rich HTML — the one component that handles every
  * math requirement in the corpus:
  *
- *   • MathML (<math>…</math>)      rendered natively by the browser
+ *   • MathML (<math>…</math>)      typeset to SVG by MathJax (crisp, consistent)
+ *   • LaTeX (\(…\), \[…\])         typeset to SVG by MathJax
  *   • inline SVG figures           graphs, number lines, diagrams
  *   • base64 <img> (data: URIs)    rasterised figures the source ships inline
  *   • <table>                      data tables, scrolled horizontally if wide
@@ -18,6 +20,11 @@ import { cn } from '@/lib/utils';
  * to whitelisted text for <RichText> — math is rendered as HTML. The content is
  * admin-ingested College Board data, but it's still sanitized here (scripts,
  * event handlers, and javascript: URLs stripped) so a bad fragment can't run.
+ *
+ * Equations arrive as MathML. The markup is written to the DOM as-is (so native
+ * MathML shows immediately and remains the fallback if JS is off), then MathJax
+ * typesets it to SVG for rendering that's identical across every browser — see
+ * `useTypesetMath` / `src/lib/mathjax.ts`.
  */
 export function MathHtml({
   html,
@@ -30,14 +37,18 @@ export function MathHtml({
   block?: boolean;
 }) {
   const clean = useMemo(() => sanitize(html ?? ''), [html]);
+  // Re-typeset whenever the sanitized markup changes (question navigation, etc.).
+  const ref = useTypesetMath<HTMLElement>([clean]);
   if (!clean) return null;
-  const Tag = block ? 'div' : 'span';
-  return (
-    <Tag
-      className={cn('math-html', className)}
-      // Sanitized above; native MathML/SVG need real HTML, not a text tokenizer.
-      dangerouslySetInnerHTML={{ __html: clean }}
-    />
+  // Sanitized above; native MathML/SVG need real HTML, not a text tokenizer.
+  const shared = {
+    className: cn('math-html', className),
+    dangerouslySetInnerHTML: { __html: clean },
+  };
+  return block ? (
+    <div ref={ref as RefObject<HTMLDivElement>} {...shared} />
+  ) : (
+    <span ref={ref as RefObject<HTMLSpanElement>} {...shared} />
   );
 }
 

@@ -111,6 +111,26 @@ function stripTagsKeepInline(s) {
   });
 }
 
+/**
+ * College Board marks the "underlined" portion a question refers to ("which
+ * choice supports the underlined sentence") with an inline STYLE, not a <u> tag:
+ *
+ *   <span style="text-decoration: underline;" role="region" …>…the phrase…</span>
+ *
+ * Since spans are stripped, that underline was silently lost — leaving those
+ * questions impossible to answer. Convert any element carrying a
+ * `text-decoration: underline` style to a bare <u> BEFORE the span strip, so the
+ * marker survives into the stored text and renders via <RichText>. The same-tag
+ * backreference keeps the match balanced; the inner is non-greedy because these
+ * wrap plain inline text (no nested same-tag). Runs before stripTagsKeepInline.
+ */
+function keepUnderline(html) {
+  return html.replace(
+    /<([a-z]+)\b[^>]*\bstyle="[^"]*text-decoration(?:-line)?:\s*underline[^"]*"[^>]*>([\s\S]*?)<\/\1>/gi,
+    '<u>$2</u>',
+  );
+}
+
 /** Collapse runs of spaces per line, drop blank lines, trim. */
 function collapse(s) {
   return s
@@ -140,6 +160,7 @@ function stripVisualBlocks(html) {
  */
 function htmlToText(html) {
   let s = stripVisualBlocks(html);
+  s = keepUnderline(s);
   s = s.replace(/<span[^>]*class="sr-only"[^>]*>[\s\S]*?<\/span>/gi, '');
   s = s.replace(/<br\s*\/?>/gi, '\n');
   // Turn list items into bulleted lines that survive the strip to plain text.
@@ -152,7 +173,8 @@ function htmlToText(html) {
 
 /** Inline HTML → single clean line (choices, table cells). */
 function inlineText(html) {
-  let s = html.replace(/<span[^>]*class="sr-only"[^>]*>[\s\S]*?<\/span>/gi, '');
+  let s = keepUnderline(html);
+  s = s.replace(/<span[^>]*class="sr-only"[^>]*>[\s\S]*?<\/span>/gi, '');
   s = s.replace(/<\/(p|div|li)>/gi, ' '); // block breaks → space (choices are usually one <p>)
   s = decodeEntities(stripTagsKeepInline(s));
   return s.replace(/[ \t\n\r\f]+/g, ' ').trim();

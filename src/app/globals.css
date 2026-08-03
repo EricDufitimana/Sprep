@@ -83,6 +83,11 @@
 .math-html p:last-child {
   margin-bottom: 0;
 }
+/* Class-based inline styling the source ships in explanations (e.g. italic
+   variable names, <span class="italic">y</span>) that carry no real tag. */
+.math-html .italic {
+  font-style: italic;
+}
 /* Figures: never let a wide graph or data-URI image blow out the column. */
 .math-html img,
 .math-html svg {
@@ -90,6 +95,23 @@
   height: auto;
   display: block;
   margin: 0.75rem auto;
+}
+/* Inline equation images (the source ships some fractions as a base64 <img>
+   inside a run of text) must flow with the sentence, not break onto their own
+   centered line like a figure does. */
+.math-html .math-container,
+.math-html .math-container img,
+.math-html img.math-img {
+  display: inline;
+  margin: 0;
+  vertical-align: middle;
+}
+/* MathJax SVG output: keep a wide display equation inside its column instead of
+   forcing the whole card to scroll. Inline math stays on the text baseline. */
+.math-html mjx-container[display='true'] {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 /* Data tables scroll horizontally inside their own box on narrow screens. */
 .math-html table {
