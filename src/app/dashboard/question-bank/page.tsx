@@ -76,6 +76,15 @@ interface BuiltQuestion {
 }
 
 const EXCLUDE_ACTIVE_KEY = 'qb:excludeActive';
+const COHORT_KEY = 'qb:cohort';
+
+/** Which release cohort the browse view is scoped to. */
+type Cohort = 'all' | 'original' | 'new';
+const COHORTS: { value: Cohort; label: string; hint: string }[] = [
+  { value: 'original', label: 'Original', hint: 'The original question pool' },
+  { value: 'new', label: 'New', hint: 'Latest Bluebook release' },
+  { value: 'all', label: 'All', hint: 'Original + new, combined' },
+];
 
 export default function QuestionBankPage() {
   const trpc = useTRPC();
@@ -98,16 +107,40 @@ export default function QuestionBankPage() {
     }
   };
 
-  // Counts drive the drill-down and recompute whenever the toggle flips; the
+  // "Original vs New vs All" — a sticky, page-wide release cohort. It keeps the
+  // newly-released Bluebook batch on its own switch instead of mixing it into
+  // the original pool. Defaults to 'original', so existing practice is unchanged
+  // until the user deliberately switches to the new questions.
+  const [cohort, setCohortState] = useState<Cohort>('original');
+  useEffect(() => {
+    const saved = localStorage.getItem(COHORT_KEY);
+    if (saved === 'all' || saved === 'original' || saved === 'new') setCohortState(saved);
+  }, []);
+  const setCohort = (v: Cohort) => {
+    setCohortState(v);
+    try {
+      localStorage.setItem(COHORT_KEY, v);
+    } catch {
+      /* private mode / storage disabled — the switch still works for the session */
+    }
+  };
+
+  // Counts drive the drill-down and recompute whenever a filter flips; the
   // customize step layers difficulty/exclusion on top and reports the pool size.
-  const counts = useQuery(trpc.questions.domainCounts.queryOptions({ section, excludeActive }));
+  const counts = useQuery(trpc.questions.domainCounts.queryOptions({ section, excludeActive, cohort }));
 
   // The same counts, but of only the questions the user hasn't done yet. Diffing
   // the two gives a subtle "how much is left in this category" indicator without
   // any new backend work — `excludeCompleted` reuses the exact set-builder logic,
   // so the number shown is what a fresh set would actually draw from.
   const remaining = useQuery(
-    trpc.questions.domainCounts.queryOptions({ section, excludeActive, excludeCompleted: true }),
+    trpc.questions.domainCounts.queryOptions({ section, excludeActive, cohort, excludeCompleted: true }),
+  );
+
+  // Size of the newly-released batch (independent of the current cohort), so the
+  // "New" switch can advertise how many questions it holds for this section.
+  const newCounts = useQuery(
+    trpc.questions.domainCounts.queryOptions({ section, excludeActive, cohort: 'new' }),
   );
 
   // `null` = still loading (unknown); a number = the not-yet-done count. A domain
@@ -159,6 +192,8 @@ export default function QuestionBankPage() {
             title="Question Bank"
             description="Browse by domain and skill, then build a custom, untimed set — the answer on demand after each question."
           />
+
+          <CohortSwitch value={cohort} onChange={setCohort} newCount={newCounts.data?.total ?? null} />
 
           <ExcludeActiveToggle value={excludeActive} onChange={setExcludeActive} />
 
@@ -358,6 +393,7 @@ export default function QuestionBankPage() {
         section={section}
         scopeLabel={customize ? scopeLabel(customize) : ''}
         excludeActive={excludeActive}
+        cohort={cohort}
         onClose={() => setCustomize(null)}
         onBuilt={(questions, label) => {
           setSession({ questions, label });
@@ -365,6 +401,83 @@ export default function QuestionBankPage() {
         }}
       />
     </>
+  );
+}
+
+/* ── Release-cohort switch ───────────────────────────────────────────────── */
+
+/**
+ * The page-wide "Original / New / All" release switch. Bluebook periodically
+ * releases new questions; rather than folding them into the original pool, this
+ * segmented control lets the user view each cohort on its own (or combined). It
+ * feeds every count and every built set, and its choice is persisted. The "New"
+ * segment advertises how many questions the latest release added for the current
+ * section.
+ */
+function CohortSwitch({
+  value,
+  onChange,
+  newCount,
+}: {
+  value: Cohort;
+  onChange: (v: Cohort) => void;
+  newCount: number | null;
+}) {
+  return (
+    <div className="mb-3">
+      <div
+        role="tablist"
+        aria-label="Question release cohort"
+        className="inline-flex w-full gap-1 rounded-control border border-line bg-surface p-1 sm:w-auto"
+      >
+        {COHORTS.map((c) => {
+          const on = value === c.value;
+          const showCount = c.value === 'new' && newCount !== null;
+          return (
+            <button
+              key={c.value}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              title={c.hint}
+              onClick={() => onChange(c.value)}
+              className={cn(
+                'flex flex-1 items-center justify-center gap-1.5 rounded-[calc(theme(borderRadius.control)-2px)] px-4 py-1.5 text-small font-medium transition-colors sm:flex-none',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue',
+                on ? 'bg-blue text-white shadow-sm' : 'text-ink-600 hover:text-ink-900',
+              )}
+            >
+              {c.value === 'new' && (
+                <span
+                  className={cn(
+                    'h-1.5 w-1.5 rounded-full',
+                    on ? 'bg-white' : newCount ? 'bg-blue' : 'bg-ink-400/60',
+                  )}
+                />
+              )}
+              {c.label}
+              {showCount && (
+                <span
+                  className={cn(
+                    'rounded-pill px-1.5 py-0.5 text-micro font-semibold tabular-nums',
+                    on ? 'bg-white/20 text-white' : 'bg-blue-tint text-blue',
+                  )}
+                >
+                  {newCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-micro text-ink-500">
+        {value === 'original'
+          ? 'Showing the original question pool — newly-released questions are kept separate.'
+          : value === 'new'
+            ? 'Showing only the latest Bluebook release.'
+            : 'Showing the original pool and the latest release together.'}
+      </p>
+    </div>
   );
 }
 
@@ -430,6 +543,7 @@ function CustomizeModal({
   section,
   scopeLabel,
   excludeActive,
+  cohort,
   onClose,
   onBuilt,
 }: {
@@ -437,6 +551,7 @@ function CustomizeModal({
   section: 'reading_writing' | 'math';
   scopeLabel: string;
   excludeActive: boolean;
+  cohort: Cohort;
   onClose: () => void;
   onBuilt: (questions: BuiltQuestion[], label: string) => void;
 }) {
@@ -466,6 +581,7 @@ function CustomizeModal({
       difficulty: diff.length ? diff : undefined,
       excludeCompleted,
       excludeActive,
+      cohort,
       order,
     };
     if (scope.kind === 'all') build.mutate(base);
@@ -581,6 +697,17 @@ function CustomizeModal({
             </span>
           </span>
         </label>
+
+        {/* Release cohort is a page-wide setting; confirm which pool this set is
+            drawn from when it isn't the default combined view. */}
+        {cohort !== 'all' && (
+          <p className="flex items-center gap-2 rounded-control bg-blue-tint px-3 py-2.5 text-small text-blue">
+            <Icon name="checkmark-circle" className="shrink-0 text-body" />
+            {cohort === 'new'
+              ? 'Drawn only from the latest Bluebook release.'
+              : 'Drawn only from the original question pool.'}
+          </p>
+        )}
 
         {/* Active-question exclusion is a page-wide setting; this just confirms
             it's being applied to the set the user is about to build. */}

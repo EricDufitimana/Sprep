@@ -127,9 +127,14 @@ const BANK_NAME = 'SAT Math Question Bank';
 function parseArgs(argv) {
   const files = [];
   const opts = {};
-  for (const a of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
     if (a === '--update') opts.update = true;
     else if (a === '--dry-run') opts.dryRun = true;
+    // --batch <key> stamps every brand-new row (a not-yet-seen external_id) with
+    // release_batch = <key>, so a Bluebook refresh can be shown as "New" without
+    // reclassifying the original pool. Existing rows keep whatever batch they had.
+    else if (a === '--batch') opts.batch = argv[++i];
     else if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
     else files.push(a);
   }
@@ -231,14 +236,15 @@ async function main() {
              (bank_id, user_id, external_id, position, domain, skill, difficulty,
               passage, question_text, options, correct_answer, explanation,
               has_visual, visual_data, extraction_status, is_default, visual_url,
-              active, section, answer_format, accepted_answers)
+              active, section, answer_format, accepted_answers, release_batch)
            values ($1::uuid, null, $2, $3, $4::question_domain, $5, $6::question_difficulty,
                    null, $7, $8::jsonb, $9, $10, $11, null, 'verified', true, null,
-                   $12, 'math', $13, $14::jsonb)`,
+                   $12, 'math', $13, $14::jsonb, $15)`,
           bank.id, r.external_id, position, r.domain, r.skill, r.difficulty,
           r.question_text, JSON.stringify(r.options), r.correct_answer, r.explanation,
           r.has_visual, r.active, r.answer_format,
           r.accepted_answers ? JSON.stringify(r.accepted_answers) : null,
+          opts.batch ?? null,
         );
       } catch (e) {
         report.failures++;
@@ -265,7 +271,10 @@ async function main() {
 
   console.log('\n================= math ingestion summary =================');
   console.log(`source questions:  ${report.total}`);
-  console.log(`inserted:          ${report.inserted}  (mcq ${report.mcq}, spr ${report.spr})`);
+  console.log(
+    `inserted:          ${report.inserted}  (mcq ${report.mcq}, spr ${report.spr})` +
+      (opts.batch ? `  [tagged release_batch=${opts.batch}]` : ''),
+  );
   console.log(`skipped duplicates:${report.duplicates}`);
   console.log(`skipped (mapping): ${report.skipped}`);
   console.log(`hard failures:     ${report.failures}`);

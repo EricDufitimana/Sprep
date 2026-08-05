@@ -15,6 +15,18 @@ import {
 import { isResponseCorrect } from '@/utils/scoring';
 
 /**
+ * Which release cohort of the bank to draw from:
+ *  - 'all'      — the whole pool (original + every new batch)
+ *  - 'original' — only the original pool (release_batch IS NULL)
+ *  - 'new'      — only questions from a Bluebook refresh (release_batch set)
+ * This keeps newly-released questions viewable on their own instead of silently
+ * mixed into the original pool. Applied at the query level so counts and the
+ * set-builder draw from exactly the same scope. Each caller applies it inline
+ * with `.is('release_batch', null)` / `.not('release_batch', 'is', null)`.
+ */
+const cohortSchema = z.enum(['all', 'original', 'new']).default('all');
+
+/**
  * Reading and repairing individual questions, plus the untimed browse flow.
  *
  * Two kinds of procedure live here, with opposite answer-visibility rules:
@@ -240,12 +252,15 @@ export const questionsRouter = createTRPCRouter({
           excludeCompleted: z.boolean().default(false),
           /** Drop questions still live in Bluebook (active = true). */
           excludeActive: z.boolean().default(false),
+          /** Release cohort to count: all | original pool | newly-released batch. */
+          cohort: cohortSchema.optional(),
         })
         .optional(),
     )
     .query(async ({ ctx, input }) => {
       const { supabase } = ctx;
       const section = input?.section ?? 'reading_writing';
+      const cohort = input?.cohort ?? 'all';
 
       // Paged: the visible verified pool exceeds PostgREST's 1000-row cap, so a
       // single select would silently truncate and undercount whole domains.
@@ -257,6 +272,9 @@ export const questionsRouter = createTRPCRouter({
           .eq('section', section)
           .order('id', { ascending: true });
         if (input?.difficulty?.length) q = q.in('difficulty', input.difficulty);
+        // Keep the Original pool and each New batch on separate switches.
+        if (cohort === 'original') q = q.is('release_batch', null);
+        else if (cohort === 'new') q = q.not('release_batch', 'is', null);
         return q.range(from, to);
       };
 
@@ -323,12 +341,15 @@ export const questionsRouter = createTRPCRouter({
         excludeCompleted: z.boolean().default(false),
         /** Drop questions still live in Bluebook (active = true). */
         excludeActive: z.boolean().default(false),
+        /** Release cohort to draw from: all | original pool | newly-released batch. */
+        cohort: cohortSchema.optional(),
         /** 'random' shuffles the draw; 'in_order' keeps question position order. */
         order: z.enum(['random', 'in_order']).default('random'),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const { supabase } = ctx;
+      const cohort = input.cohort ?? 'all';
 
       // Paged: an unscoped ("randomize everything") or large-domain pool can
       // exceed 1000 rows, and a truncated pool would bias the random draw.
@@ -343,6 +364,9 @@ export const questionsRouter = createTRPCRouter({
         if (input.skills?.length) q = q.in('skill', input.skills);
         else if (input.domains?.length) q = q.in('domain', input.domains);
         if (input.difficulty?.length) q = q.in('difficulty', input.difficulty);
+        // Same Original/New split as the counts, so a built set matches the tiles.
+        if (cohort === 'original') q = q.is('release_batch', null);
+        else if (cohort === 'new') q = q.not('release_batch', 'is', null);
         return q.range(from, to);
       };
 

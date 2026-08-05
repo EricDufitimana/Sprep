@@ -402,6 +402,10 @@ function parseArgs(argv) {
     else if (a === '--not-default') opts.default = false;
     else if (a === '--update') opts.update = true;
     else if (a === '--dry-run') opts.dryRun = true;
+    // --batch <key>: stamp every brand-new row (a not-yet-seen external_id) with
+    // release_batch = <key>, so a Bluebook refresh shows as "New" in the Question
+    // Bank without reclassifying the original pool. Existing rows keep their batch.
+    else if (a === '--batch') opts.batch = argv[++i];
     else if (a === '--print') { opts.dryRun = true; opts.print = argv[++i]; }
     else if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
     else files.push(a);
@@ -562,9 +566,9 @@ async function main() {
           `insert into public.questions
              (bank_id, user_id, external_id, position, domain, skill, difficulty,
               passage, question_text, options, correct_answer, explanation,
-              has_visual, visual_data, extraction_status, is_default, visual_url, active)
+              has_visual, visual_data, extraction_status, is_default, visual_url, active, release_batch)
            values ($1::uuid, $2::uuid, $3, $4, $5::question_domain, $6, $7::question_difficulty,
-                   $8, $9, $10::jsonb, $11, $12, $13, $14, $15::extraction_status, $16, null, $17)`,
+                   $8, $9, $10::jsonb, $11, $12, $13, $14, $15::extraction_status, $16, null, $17, $18)`,
           bank.id,
           opts.default ? null : opts.user,
           r.external_id,
@@ -582,6 +586,7 @@ async function main() {
           r.extraction_status,
           opts.default,
           r.active,
+          opts.batch ?? null,
         );
       } catch (e) {
         report.failures++;
@@ -627,7 +632,10 @@ async function main() {
   /* ---------------------------- report ---------------------------- */
   console.log('\n==================== ingestion summary ====================');
   console.log(`source questions:        ${report.total}`);
-  console.log(`inserted (verified):     ${report.verified}`);
+  console.log(
+    `inserted (verified):     ${report.verified}` +
+      (opts.batch ? `  [tagged release_batch=${opts.batch}]` : ''),
+  );
   console.log(`inserted (needs_review): ${report.needsReview}`);
   if (opts.update) console.log(`updated (existing rows): ${report.updated}`);
   console.log(`skipped (duplicates):    ${report.duplicates}`);

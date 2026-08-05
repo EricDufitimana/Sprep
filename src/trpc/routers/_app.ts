@@ -1,6 +1,7 @@
 import { createTRPCRouter } from '../init';
 import { healthRouter } from './health';
 import { answersRouter } from './answers';
+import { errorsRouter } from './errors';
 import { profileRouter } from './profile';
 import { progressRouter } from './progress';
 import { questionBanksManagementRouter } from './question-banks-management';
@@ -15,6 +16,7 @@ export const appRouter = createTRPCRouter({
   health: healthRouter,
   tests: testsRouter,
   answers: answersRouter,
+  errors: errorsRouter,
   questions: questionsRouter,
   questionBanksManagement: questionBanksManagementRouter,
   modulesManagement: modulesManagementRouter,
