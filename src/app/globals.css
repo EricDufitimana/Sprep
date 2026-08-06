@@ -64,6 +64,28 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
+  /**
+   * Screen-reader-only. The math corpus ships a spoken "long description" for
+   * every figure — e.g. a scatterplot's points as "(15 comma 21.80)" or a
+   * vertex as "upper A" — inside `class="sr-only"`, meant to be read aloud, not
+   * shown. This markup is injected via dangerouslySetInnerHTML, so Tailwind's
+   * content scan never sees the class and (in v3) purges its own `.sr-only`
+   * utility; without this rule those descriptions render as visible text and
+   * coordinates literally read "comma". Clip-based hiding keeps them in the
+   * accessibility tree for screen readers while removing them visually.
+   */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 }
 
 /**

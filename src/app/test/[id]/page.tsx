@@ -50,6 +50,11 @@ export default function TestPage() {
   const [eliminating, setEliminating] = useState(false);
   const [struck, setStruck] = useState<Record<string, string[]>>({});
   const [submitted, setSubmitted] = useState(false);
+  // Set the instant the countdown hits zero. Freezes the sitting — answers lock,
+  // navigation stops — and drives the blocking "Time's up" overlay while the
+  // auto-submit runs. Stays true even if that submit errors, so the student
+  // can't keep answering past the deadline; they only get a retry.
+  const [timeExpired, setTimeExpired] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [timerHidden, setTimerHidden] = useState(false);
@@ -137,6 +142,7 @@ export default function TestPage() {
 
   const doSubmit = useCallback(() => {
     if (submitted) return;
+    setError(null);
     setSubmitted(true);
     // Flush the time spent on the question currently on screen before grading.
     const leaving = prevQid.current;
@@ -169,6 +175,13 @@ export default function TestPage() {
     doSubmitRef.current = doSubmit;
   }, [doSubmit]);
 
+  // Mirror the frozen state into a ref so the always-on keydown listener can
+  // read it without being torn down and re-added on every lock change.
+  const lockedRef = useRef(false);
+  useEffect(() => {
+    lockedRef.current = submitted || timeExpired;
+  }, [submitted, timeExpired]);
+
   useEffect(() => {
     if (deadline === null) return;
     let fired = false;
@@ -177,7 +190,11 @@ export default function TestPage() {
       setRemaining(secsLeft);
       if (secsLeft <= 0 && !fired) {
         fired = true;
-        setTimeout(() => doSubmitRef.current(), 0);
+        // Lock the sitting and kick off the submit in the same tick, so both
+        // state updates batch into one render — the overlay opens straight to
+        // "Submitting…" with no flash of an in-between state.
+        setTimeExpired(true);
+        doSubmitRef.current();
       }
     };
     tick(); // paint the correct value immediately, no one-second flash
@@ -191,6 +208,7 @@ export default function TestPage() {
   // glyphs like "¡"; the physical Digit1..Digit4 codes are layout-independent.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (lockedRef.current) return;
       if (!(e.metaKey || e.ctrlKey) || !e.altKey) return;
       const match = /^Digit([1-4])$/.exec(e.code);
       if (!match) return;
@@ -246,7 +264,12 @@ export default function TestPage() {
     text: o.text,
   }));
 
+  // Once the timer expires (or a submit is in flight) the sitting is frozen:
+  // no more picking, typing, flagging, or crossing out.
+  const locked = submitted || timeExpired;
+
   const select = (letter: string) => {
+    if (locked) return;
     const next = answers[q.id] === letter ? null : letter;
     setAnswers((prev) => ({ ...prev, [q.id]: next }));
     save.mutate({
@@ -259,6 +282,7 @@ export default function TestPage() {
 
   /** SPR grid-in: store the raw typed string as the selected answer. */
   const typeAnswer = (value: string) => {
+    if (locked) return;
     const next = value === '' ? null : value;
     setAnswers((prev) => ({ ...prev, [q.id]: next }));
     save.mutate({
@@ -270,12 +294,14 @@ export default function TestPage() {
   };
 
   const toggleFlag = () => {
+    if (locked) return;
     const next = !flags[q.id];
     setFlags((prev) => ({ ...prev, [q.id]: next }));
     save.mutate({ attemptId, questionId: q.id, flagged: next, timeSpentMs: accumulateTime(q.id) });
   };
 
   const toggleStrike = (letter: string) => {
+    if (locked) return;
     setStruck((prev) => {
       const list = prev[q.id] ?? [];
       return {
@@ -622,6 +648,55 @@ export default function TestPage() {
 
       {/* SAT math reference sheet — opened from the header's "Reference". */}
       <SatReferenceSheet open={refOpen} onClose={() => setRefOpen(false)} />
+
+      {/* ── Freeze + auto-submit overlay ──────────────────────────────
+          Covers the whole screen the instant time runs out (or on manual
+          submit), so nothing underneath can be clicked or typed while the
+          sitting is graded. If the submit fails, it stays up with a retry —
+          the student never gets back to answering past the deadline. */}
+      {(submitted || timeExpired) && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-white/95 px-6 text-center backdrop-blur-sm"
+          role="alertdialog"
+          aria-modal="true"
+          aria-live="assertive"
+          aria-labelledby="submit-overlay-title"
+        >
+          <div className="w-full max-w-sm">
+            {submitted || !error ? (
+              <>
+                <div
+                  className="mx-auto mb-5 h-9 w-9 animate-spin rounded-full border-[3px] border-[#1D2A5B] border-t-transparent"
+                  aria-hidden
+                />
+                <h2 id="submit-overlay-title" className="dsat-text dsat-bold text-[18px]">
+                  {timeExpired ? 'Time’s up' : 'Submitting'}
+                </h2>
+                <p className="dsat-text mt-2">
+                  {timeExpired
+                    ? 'Your time has ended. Submitting your answers…'
+                    : 'Submitting your test…'}
+                </p>
+              </>
+            ) : (
+              <>
+                <h2 id="submit-overlay-title" className="dsat-text dsat-bold text-[18px] text-[#C0392B]">
+                  Couldn’t submit
+                </h2>
+                <p className="dsat-text mt-2">
+                  {error ?? 'Something went wrong.'} Your time is up, so your answers are final.
+                </p>
+                <button
+                  onClick={doSubmit}
+                  className="mt-5 rounded-full bg-[#1D2A5B] px-6 py-2 text-[13px] font-semibold text-white"
+                >
+                  Try again
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
