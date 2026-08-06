@@ -150,22 +150,40 @@ export default function TestPage() {
   // Countdown, mirroring Bluebook's m:ss readout in the header.
   const timerSeconds = attempt.data?.timerSeconds ?? null;
   const isTimed = Boolean(attempt.data?.timed && timerSeconds);
+
+  // The deadline is anchored to the server's `started_at`, not to when this
+  // component mounted, so a refresh mid-sitting resumes the *same* countdown
+  // instead of restarting it, and each tick is derived from the wall clock so a
+  // backgrounded/throttled tab can't make the timer drift.
+  const deadline = useMemo(() => {
+    if (!isTimed || timerSeconds === null || !attempt.data?.startedAt) return null;
+    return new Date(attempt.data.startedAt).getTime() + timerSeconds * 1000;
+  }, [isTimed, timerSeconds, attempt.data?.startedAt]);
+
+  // Auto-submit must fire from inside the interval, but `doSubmit`'s identity
+  // changes every render (it closes over the submit mutation). Holding it in a
+  // ref keeps the interval effect from tearing down and restarting each render —
+  // the bug that made the old timer reset itself and appear to freeze.
+  const doSubmitRef = useRef(doSubmit);
   useEffect(() => {
-    if (!isTimed || timerSeconds === null) return;
-    setRemaining(timerSeconds);
-    const id = setInterval(() => {
-      setRemaining((r) => {
-        if (r === null) return r;
-        if (r <= 1) {
-          clearInterval(id);
-          setTimeout(doSubmit, 0);
-          return 0;
-        }
-        return r - 1;
-      });
-    }, 1000);
+    doSubmitRef.current = doSubmit;
+  }, [doSubmit]);
+
+  useEffect(() => {
+    if (deadline === null) return;
+    let fired = false;
+    const tick = () => {
+      const secsLeft = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+      setRemaining(secsLeft);
+      if (secsLeft <= 0 && !fired) {
+        fired = true;
+        setTimeout(() => doSubmitRef.current(), 0);
+      }
+    };
+    tick(); // paint the correct value immediately, no one-second flash
+    const id = setInterval(tick, 500);
     return () => clearInterval(id);
-  }, [isTimed, timerSeconds, doSubmit]);
+  }, [deadline]);
 
   // Keyboard eliminator: ⌘⌥1..4 (Ctrl+Alt on non-Mac) crosses out choice A..D,
   // pressing the same combo again restores it — a fast way to narrow answers.

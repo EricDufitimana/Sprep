@@ -71,7 +71,7 @@ export function UploadBankModal({ open, onClose }: UploadBankModalProps) {
     setError(null);
     if (!file) return setError('Choose the answers PDF.');
 
-    const bankName = name.trim() || file.name.replace(/\.pdf$/i, '');
+    const bankName = name.trim() || file.name.replace(/\.(pdf|docx?)$/i, '');
 
     setPhase('uploading');
     try {
@@ -81,6 +81,7 @@ export function UploadBankModal({ open, onClose }: UploadBankModalProps) {
       if (!uid) throw new Error('Your session expired. Sign in again.');
 
       // Path is namespaced by user id — that's what the bucket's RLS checks.
+      // Keep the original extension so the server can tell PDF from Word.
       const path = `${uid}/${Date.now()}/${file.name.replace(/[^\w.-]/g, '_')}`;
       setPct(30);
 
@@ -125,7 +126,7 @@ export function UploadBankModal({ open, onClose }: UploadBankModalProps) {
             inputRef={fileRef}
             onPick={(f) => {
               setFile(f);
-              if (f && !name.trim()) setName(f.name.replace(/\.pdf$/i, ''));
+              if (f && !name.trim()) setName(f.name.replace(/\.(pdf|docx?)$/i, ''));
             }}
           />
 
@@ -138,9 +139,11 @@ export function UploadBankModal({ open, onClose }: UploadBankModalProps) {
           />
 
           <p className="rounded-control bg-blue-wash px-3 py-2 text-small text-ink-500">
-            Use the <strong className="font-medium text-ink-700">Answers</strong> export — the one
-            containing each question’s correct answer and rationale. Questions, options, answers,
-            domains, and skills are all read from it.
+            Upload a <strong className="font-medium text-ink-700">PDF or Word</strong> file that
+            includes each question’s options, the correct answer, and ideally an explanation. A
+            College Board <strong className="font-medium text-ink-700">Answers</strong> export and a
+            labelled practice set both work — questions, options, answers, domains, and skills are
+            read automatically.
           </p>
 
           {error && (
@@ -208,9 +211,12 @@ function FilePick({
 }) {
   const [dragging, setDragging] = useState(false);
 
+  const accepts = (f: File | undefined | null): f is File =>
+    !!f && /\.(pdf|docx?)$/i.test(f.name);
+
   return (
     <div>
-      <p className="mb-1.5 text-small font-medium text-ink-700">Answers PDF</p>
+      <p className="mb-1.5 text-small font-medium text-ink-700">Question file</p>
       <button
         onClick={() => inputRef.current?.click()}
         onDragOver={(e) => {
@@ -222,7 +228,7 @@ function FilePick({
           e.preventDefault();
           setDragging(false);
           const dropped = e.dataTransfer.files?.[0];
-          if (dropped && dropped.type === 'application/pdf') onPick(dropped);
+          if (accepts(dropped)) onPick(dropped);
         }}
         className={cn(
           'flex w-full items-center gap-3 rounded-control border border-dashed px-4 py-5 text-left transition-colors',
@@ -239,17 +245,17 @@ function FilePick({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-body text-ink-900">
-            {file ? file.name : 'Choose a PDF, or drop one here'}
+            {file ? file.name : 'Choose a PDF or Word file, or drop one here'}
           </span>
           <span className="block text-micro text-ink-400">
-            {file ? `${(file.size / 1024).toFixed(0)} KB` : 'The College Board “Answers” export'}
+            {file ? `${(file.size / 1024).toFixed(0)} KB` : 'PDF or Word (.pdf, .docx)'}
           </span>
         </span>
       </button>
       <input
         ref={inputRef as React.RefObject<HTMLInputElement>}
         type="file"
-        accept="application/pdf,.pdf"
+        accept="application/pdf,.pdf,.doc,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         className="hidden"
         onChange={(e) => onPick(e.target.files?.[0] ?? null)}
       />

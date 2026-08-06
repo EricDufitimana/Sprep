@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { createTRPCRouter, protectedProcedure } from '../init';
 import { extractedQuestionSchema, questionBankSchema, sectionSchema } from '@/lib/validation';
-import { parseAnswerPdf } from '@/utils/question-bank-parser';
+import { parseAnswerDocument, detectDocumentKind } from '@/utils/question-bank-parser';
 import { describeQuestions } from '@/utils/bank-description';
 import { fetchAllRows } from '@/utils/paginate';
 import { COMPLETED_ANSWER_FILTER } from './questions';
@@ -371,14 +371,18 @@ export const questionBanksManagementRouter = createTRPCRouter({
 
       const buffer = Buffer.from(await file.arrayBuffer());
 
+      // PDF or Word — inferred from the stored file's extension/type.
+      const kind = detectDocumentKind(file.type || input.sourcePath);
+
       let parsed;
       try {
-        parsed = await parseAnswerPdf(buffer);
+        parsed = await parseAnswerDocument(buffer, { kind, useAi: true });
       } catch (e) {
         console.error('❌ [questionBanks.createFromPdf] Parse threw:', e);
         throw new TRPCError({
           code: 'UNPROCESSABLE_CONTENT',
-          message: 'That PDF could not be read. Is it a College Board answer export?',
+          message:
+            'That file could not be read. Upload a PDF or Word document that includes the questions and their answers.',
         });
       }
 
@@ -386,7 +390,7 @@ export const questionBanksManagementRouter = createTRPCRouter({
         throw new TRPCError({
           code: 'UNPROCESSABLE_CONTENT',
           message:
-            'No questions found in that PDF. It needs to be the "Answers" export — the one containing each question’s correct answer and rationale.',
+            'No questions found in that file. It needs to include each question’s options, the correct answer, and ideally an explanation — an “Answers” export or a labelled practice set both work.',
         });
       }
 
@@ -395,7 +399,8 @@ export const questionBanksManagementRouter = createTRPCRouter({
       // not sink the whole import: the questions are still usable, they just
       // lose their figure, so it's caught and reported rather than thrown.
       const figureUrls = new Map<string, string>();
-      try {
+      // Figures are cropped from vector PDF art; a Word upload has none.
+      if (kind === 'pdf') try {
         // Imported here, not at module scope. `pdf-figures` pulls in
         // @napi-rs/canvas (a native Skia binding) and pdfjs; at module scope
         // every procedure in this router — profile lookups included — would
