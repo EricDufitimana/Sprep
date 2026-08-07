@@ -40,6 +40,7 @@ export const extractionStatusSchema = z.enum(['verified', 'needs_review', 'skipp
 
 /** Matches the `word_charge` enum in Postgres. */
 export const wordChargeSchema = z.enum(['positive', 'negative', 'neutral']);
+export type WordCharge = z.infer<typeof wordChargeSchema>;
 
 /** Matches the `morpheme_charge` enum in Postgres (nullable in the column). */
 export const morphemeChargeSchema = z.enum(['positive', 'negative', 'neutral']);

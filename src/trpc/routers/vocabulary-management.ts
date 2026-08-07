@@ -61,13 +61,20 @@ export const vocabularyManagementRouter = createTRPCRouter({
       return { success: true };
     }),
 
+  /**
+   * The signed-in user's OWN words — the personal list behind "My words". The
+   * shared SAT corpus (is_default) is deliberately excluded here: those thousands
+   * of seeded rows are search-and-prefill material (see `searchBank`), not
+   * something the user built up themselves.
+   */
   listWords: protectedProcedure
     .input(z.object({ setId: z.string().uuid().optional() }).optional())
     .query(async ({ ctx, input }) => {
       let query = ctx.supabase
         .from('vocabulary_words')
         .select('id, set_id, word, sentence, definition, root, charge, part_of_speech, created_at')
-        .order('created_at', { ascending: true });
+        .eq('is_default', false)
+        .order('created_at', { ascending: false });
 
       if (input?.setId) query = query.eq('set_id', input.setId);
 
@@ -76,6 +83,34 @@ export const vocabularyManagementRouter = createTRPCRouter({
       if (error) {
         console.error('❌ [vocabulary.listWords] Query failed:', error);
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not load words' });
+      }
+
+      return data ?? [];
+    }),
+
+  /**
+   * Autocomplete against the shared SAT corpus. As the user types a word they
+   * keep encountering, this prefix-matches the seeded (is_default) words so the
+   * add form can prefill a real definition, sentence, root, charge and
+   * part-of-speech instead of making them write it all by hand.
+   */
+  searchBank: protectedProcedure
+    .input(z.object({ query: z.string().min(1).max(80) }))
+    .query(async ({ ctx, input }) => {
+      const q = input.query.trim();
+      if (!q) return [];
+
+      const { data, error } = await ctx.supabase
+        .from('vocabulary_words')
+        .select('id, word, sentence, definition, root, charge, part_of_speech')
+        .eq('is_default', true)
+        .ilike('word', `${q}%`)
+        .order('word', { ascending: true })
+        .limit(8);
+
+      if (error) {
+        console.error('❌ [vocabulary.searchBank] Query failed:', error);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not search the word bank' });
       }
 
       return data ?? [];
