@@ -61,13 +61,19 @@ export function isAnswerCorrect(selected: string | null, correct: string): boole
 
 /**
  * Parse an SAT student-response token to a number. Handles integers, decimals,
- * a leading `+`, thousands commas, and `a/b` fractions. Returns null for word
- * forms ("three halves") — those fall back to literal string matching.
+ * a leading `+`, thousands commas, `a/b` fractions, a trailing `%`, and a
+ * leading `$`. Returns null for word forms — those are handled by
+ * {@link wordFormToNumber}, and both feed {@link parseAnswerNumber}.
  */
 export function normalizeNumericAnswer(raw: string): number | null {
-  const s = raw.trim().replace(/,/g, '').replace(/^\+/, '');
+  const s = raw
+    .trim()
+    .replace(/,/g, '')
+    .replace(/^\+/, '')
+    .replace(/^\$/, '')
+    .replace(/%$/, '');
   if (s === '') return null;
-  const frac = /^(-?\d+)\/(\d+)$/.exec(s);
+  const frac = /^(-?\d+)\/(-?\d+)$/.exec(s);
   if (frac) {
     const denom = Number(frac[2]);
     return denom === 0 ? null : Number(frac[1]) / denom;
@@ -76,10 +82,107 @@ export function normalizeNumericAnswer(raw: string): number | null {
   return null;
 }
 
+// Cardinal number words → value. `a`/`an` behave as 1 ("a half" = 1/2).
+const ONES: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+  eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
+  fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+  nineteen: 19, a: 1, an: 1,
+};
+const TENS: Record<string, number> = {
+  twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70,
+  eighty: 80, ninety: 90,
+};
+// Denominator (fraction) words → denominator, singular and plural.
+const DENOM: Record<string, number> = {
+  half: 2, halves: 2, third: 3, thirds: 3, quarter: 4, quarters: 4,
+  fourth: 4, fourths: 4, fifth: 5, fifths: 5, sixth: 6, sixths: 6,
+  seventh: 7, sevenths: 7, eighth: 8, eighths: 8, ninth: 9, ninths: 9,
+  tenth: 10, tenths: 10, eleventh: 11, elevenths: 11, twelfth: 12,
+  twelfths: 12, sixteenth: 16, sixteenths: 16, twentieth: 20, twentieths: 20,
+};
+
+/** Parse a whole-number phrase ("twenty one", "one hundred") to a value. */
+function parseCardinalPhrase(words: string[]): number | null {
+  if (words.length === 0) return null;
+  let total = 0;
+  let current = 0;
+  let matched = false;
+  for (const w of words) {
+    if (w === 'and') continue;
+    if (w in ONES) {
+      current += ONES[w];
+    } else if (w in TENS) {
+      current += TENS[w];
+    } else if (w === 'hundred') {
+      current = (current || 1) * 100;
+    } else if (w === 'thousand') {
+      total += (current || 1) * 1000;
+      current = 0;
+    } else {
+      return null; // an unrecognized word — not a pure cardinal phrase
+    }
+    matched = true;
+  }
+  return matched ? total + current : null;
+}
+
+/** Parse a fraction phrase ("one half", "three quarters", "half") to a value. */
+function parseFractionPhrase(words: string[]): number | null {
+  if (words.length === 0) return null;
+  const denom = DENOM[words[words.length - 1]];
+  if (!denom) return null;
+  const numWords = words.slice(0, -1);
+  const numerator = numWords.length === 0 ? 1 : parseCardinalPhrase(numWords);
+  if (numerator === null) return null;
+  return numerator / denom;
+}
+
+/**
+ * Convert an English word-form number to its numeric value, or null if it isn't
+ * one. Covers cardinals ("twenty one"), fraction words ("one half", "three
+ * quarters", "half"), and mixed numbers ("one and a half"). This is what lets a
+ * student's "1/2" match a stored "one half", and vice versa.
+ */
+export function wordFormToNumber(raw: string): number | null {
+  const s = raw
+    .toLowerCase()
+    .trim()
+    .replace(/[-–—]/g, ' ')
+    .replace(/\s+/g, ' ');
+  if (s === '') return null;
+
+  // Mixed number: "<whole> and <fraction>" → whole + fraction.
+  const andParts = s.split(' and ');
+  if (andParts.length === 2) {
+    const whole = parseCardinalPhrase(andParts[0].split(' ').filter(Boolean));
+    const frac = parseFractionPhrase(andParts[1].split(' ').filter(Boolean));
+    if (whole !== null && frac !== null) return whole + frac;
+  }
+
+  const words = s.split(' ').filter(Boolean);
+  const frac = parseFractionPhrase(words);
+  if (frac !== null) return frac;
+  return parseCardinalPhrase(words);
+}
+
+/**
+ * Parse any student/answer string to a number: strict numeric token first
+ * (fractions, decimals, %, $), then English word forms. Central to grading —
+ * every SPR comparison flows through it so equivalent representations
+ * ("1/2", "0.5", ".5", "one half") all reduce to the same value.
+ */
+export function parseAnswerNumber(raw: string): number | null {
+  const numeric = normalizeNumericAnswer(raw);
+  if (numeric !== null) return numeric;
+  return wordFormToNumber(raw);
+}
+
 /**
  * Grade any question. MCQ compares letters; SPR (free-response) accepts a
- * numeric match against any accepted answer (fractions/decimals equated), or a
- * case-insensitive literal match for word-form answers.
+ * numeric match against any accepted answer — fractions, decimals, percents,
+ * and English word forms are all reduced to a number and compared — falling
+ * back to a case-insensitive literal match only when neither side is numeric.
  */
 export function isResponseCorrect(q: ScorableQuestion, selected: string | null): boolean {
   if (selected === null || selected.trim() === '') return false;
@@ -88,17 +191,17 @@ export function isResponseCorrect(q: ScorableQuestion, selected: string | null):
     return isAnswerCorrect(selected, q.correct_answer);
   }
 
-  const accepted: string[] = Array.isArray(q.accepted_answers)
+  const accepted: string[] = Array.isArray(q.accepted_answers) && q.accepted_answers.length > 0
     ? (q.accepted_answers as unknown[]).map(String)
     : [q.correct_answer];
 
-  const selNum = normalizeNumericAnswer(selected);
-  const selLiteral = selected.trim().toLowerCase();
+  const selNum = parseAnswerNumber(selected);
+  const selLiteral = selected.trim().replace(/\s+/g, ' ').toLowerCase();
 
   return accepted.some((a) => {
-    const aNum = normalizeNumericAnswer(a);
+    const aNum = parseAnswerNumber(a);
     if (selNum !== null && aNum !== null) return Math.abs(selNum - aNum) < 1e-9;
-    return a.trim().toLowerCase() === selLiteral;
+    return a.trim().replace(/\s+/g, ' ').toLowerCase() === selLiteral;
   });
 }
 

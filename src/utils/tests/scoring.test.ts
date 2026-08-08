@@ -2,8 +2,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isAnswerCorrect,
+  isResponseCorrect,
+  normalizeNumericAnswer,
+  parseAnswerNumber,
   percent,
   scoreAttempt,
+  wordFormToNumber,
   type ScorableAnswer,
   type ScorableQuestion,
 } from '../scoring.ts';
@@ -40,6 +44,118 @@ describe('isAnswerCorrect', () => {
 
   it('treats a blank as incorrect, never as a match', () => {
     assert.equal(isAnswerCorrect(null, 'A'), false);
+  });
+});
+
+describe('normalizeNumericAnswer', () => {
+  it('parses integers, decimals, leading dot, and a leading +', () => {
+    assert.equal(normalizeNumericAnswer('5'), 5);
+    assert.equal(normalizeNumericAnswer('0.5'), 0.5);
+    assert.equal(normalizeNumericAnswer('.5'), 0.5);
+    assert.equal(normalizeNumericAnswer('+3'), 3);
+  });
+
+  it('parses fractions, including negatives', () => {
+    assert.equal(normalizeNumericAnswer('1/2'), 0.5);
+    assert.equal(normalizeNumericAnswer('3/4'), 0.75);
+    assert.equal(normalizeNumericAnswer('-1/2'), -0.5);
+    assert.equal(normalizeNumericAnswer('7/0'), null); // no divide by zero
+  });
+
+  it('strips thousands commas, a leading $, and a trailing %', () => {
+    assert.equal(normalizeNumericAnswer('1,250'), 1250);
+    assert.equal(normalizeNumericAnswer('$40'), 40);
+    assert.equal(normalizeNumericAnswer('50%'), 50);
+  });
+
+  it('returns null for word forms and junk', () => {
+    assert.equal(normalizeNumericAnswer('one half'), null);
+    assert.equal(normalizeNumericAnswer('abc'), null);
+    assert.equal(normalizeNumericAnswer(''), null);
+  });
+});
+
+describe('wordFormToNumber', () => {
+  it('parses fraction words in any casing/spacing', () => {
+    assert.equal(wordFormToNumber('one half'), 0.5);
+    assert.equal(wordFormToNumber('  ONE   HALF '), 0.5);
+    assert.equal(wordFormToNumber('one-half'), 0.5);
+    assert.equal(wordFormToNumber('a half'), 0.5);
+    assert.equal(wordFormToNumber('half'), 0.5);
+    assert.equal(wordFormToNumber('two thirds'), 2 / 3);
+    assert.equal(wordFormToNumber('three quarters'), 0.75);
+    assert.equal(wordFormToNumber('three fourths'), 0.75);
+    assert.equal(wordFormToNumber('five eighths'), 0.625);
+  });
+
+  it('parses cardinal words and mixed numbers', () => {
+    assert.equal(wordFormToNumber('twelve'), 12);
+    assert.equal(wordFormToNumber('twenty one'), 21);
+    assert.equal(wordFormToNumber('one hundred'), 100);
+    assert.equal(wordFormToNumber('one and a half'), 1.5);
+    assert.equal(wordFormToNumber('two and three quarters'), 2.75);
+  });
+
+  it('returns null for things that are not numbers', () => {
+    assert.equal(wordFormToNumber('banana'), null);
+    assert.equal(wordFormToNumber(''), null);
+    assert.equal(wordFormToNumber('the answer'), null);
+  });
+});
+
+describe('parseAnswerNumber', () => {
+  it('reduces every equivalent representation of one half to 0.5', () => {
+    for (const form of ['1/2', '0.5', '.5', 'one half', 'a half', 'half']) {
+      assert.equal(parseAnswerNumber(form), 0.5, `failed on "${form}"`);
+    }
+  });
+});
+
+describe('isResponseCorrect (SPR free-response)', () => {
+  const spr = (accepted: string[]): ScorableQuestion => ({
+    id: 'q',
+    domain: null,
+    skill: null,
+    correct_answer: accepted[0],
+    answer_format: 'spr',
+    accepted_answers: accepted,
+  });
+
+  it('regression: "1/2" matches a stored word-form answer "one half"', () => {
+    assert.equal(isResponseCorrect(spr(['one half']), '1/2'), true);
+  });
+
+  it('grades every equivalent form of the answer as correct', () => {
+    const q = spr(['1/2']);
+    for (const ok of ['1/2', '0.5', '.5', 'one half', 'a half', 'half', ' 1/2 ']) {
+      assert.equal(isResponseCorrect(q, ok), true, `should accept "${ok}"`);
+    }
+  });
+
+  it('matches when the stored answer is the word and the student is numeric, and vice versa', () => {
+    assert.equal(isResponseCorrect(spr(['one half']), '0.5'), true);
+    assert.equal(isResponseCorrect(spr(['0.5']), 'one half'), true);
+  });
+
+  it('accepts any of several accepted answers', () => {
+    const q = spr(['1/2', '0.5', 'one half']);
+    assert.equal(isResponseCorrect(q, '2/4'), true);
+    assert.equal(isResponseCorrect(q, '3/4'), false);
+  });
+
+  it('still rejects genuinely wrong answers', () => {
+    const q = spr(['one half']);
+    assert.equal(isResponseCorrect(q, '1/3'), false);
+    assert.equal(isResponseCorrect(q, 'two'), false);
+    assert.equal(isResponseCorrect(q, ''), false);
+    assert.equal(isResponseCorrect(q, null), false);
+  });
+
+  it('falls back to a normalized literal match for non-numeric word answers', () => {
+    const q = spr(['undefined']);
+    assert.equal(isResponseCorrect(q, 'UNDEFINED'), true);
+    assert.equal(isResponseCorrect(q, '  undefined '), true);
+    assert.equal(isResponseCorrect(q, 'defined'), false);
   });
 });
 
