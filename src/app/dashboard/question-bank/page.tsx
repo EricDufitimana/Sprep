@@ -836,6 +836,16 @@ function Taker({
     return () => clearInterval(iv);
   }, [index, st.result]);
 
+  // Prefetch the answer the instant a question comes on screen so "Check" is
+  // truly instant — the reveal is already cached by the time it's clicked, no
+  // in-flight request, no loading spinner. Only MCQ can be prefetched: SPR
+  // grid-ins grade server-side and record an attempt, so they're checked live.
+  useEffect(() => {
+    if (isSpr || st.result) return;
+    void queryClient.prefetchQuery(trpc.questions.reveal.queryOptions({ questionId: q.id }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.id, isSpr]);
+
   const check = useMutation(
     trpc.questions.check.mutationOptions({
       onSuccess: () => {
