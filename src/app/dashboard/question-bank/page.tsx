@@ -53,6 +53,17 @@ const DIFFICULTIES: { value: Difficulty; label: string }[] = [
   { value: 'hard', label: 'Hard' },
 ];
 
+type ByDifficulty = { easy: number; medium: number; hard: number };
+
+/** Difficulty → dot hue, reusing the app's semantic tints (easy = calm green,
+ *  medium = amber, hard = miss/red). Kept as a tiny colored pip so the split
+ *  reads at a glance without shouting. */
+const DIFF_DOT: Record<Difficulty, string> = {
+  easy: 'bg-green',
+  medium: 'bg-amber',
+  hard: 'bg-miss',
+};
+
 type Scope =
   | { kind: 'all' }
   | { kind: 'domain'; domain: string }
@@ -152,6 +163,14 @@ export default function QuestionBankPage() {
     remaining.data
       ? remaining.data.domains.find((x) => x.domain === d)?.skills.find((s) => s.skill === skill)
           ?.total ?? 0
+      : null;
+  // The same not-yet-done pool, split by difficulty — feeds the subtle
+  // easy/medium/hard tally under each skill. Absent entry = nothing left, so a
+  // zeroed bucket is correct, not unknown.
+  const remainingSkillByDifficulty = (d: string, skill: string): ByDifficulty | null =>
+    remaining.data
+      ? remaining.data.domains.find((x) => x.domain === d)?.skills.find((s) => s.skill === skill)
+          ?.byDifficulty ?? { easy: 0, medium: 0, hard: 0 }
       : null;
 
   const [domain, setDomain] = useState<string | null>(null); // null = Level 1
@@ -308,6 +327,7 @@ export default function QuestionBankPage() {
             {(domainData?.skills ?? []).map((s) => {
               const on = selectedSkills.has(s.skill);
               const left = remainingSkill(domain, s.skill);
+              const byDiff = remainingSkillByDifficulty(domain, s.skill);
               const tone = DOMAIN_TONES[domain];
               const doneFrac =
                 left !== null && s.total > 0 ? Math.min(1, Math.max(0, (s.total - left) / s.total)) : 0;
@@ -328,7 +348,7 @@ export default function QuestionBankPage() {
                     on ? 'border-blue bg-blue-tint' : 'border-line hover:border-ink-400/40',
                   )}
                 >
-                  <span className="flex items-center gap-3">
+                  <span className="flex min-w-0 items-center gap-3">
                     <span
                       className={cn(
                         'flex h-5 w-5 shrink-0 items-center justify-center rounded border',
@@ -337,7 +357,14 @@ export default function QuestionBankPage() {
                     >
                       {on && <Icon name="checkmark" className="text-micro" />}
                     </span>
-                    <span className="text-body font-medium text-ink-900">{s.skill}</span>
+                    <span className="min-w-0">
+                      <span className="block text-body font-medium text-ink-900">{s.skill}</span>
+                      {/* Subtle easy/medium/hard split of what's still left — three
+                          tinted pips, muted numbers, hidden once the skill is done. */}
+                      {byDiff && (left == null || left > 0) && (
+                        <DifficultySplit by={byDiff} />
+                      )}
+                    </span>
                   </span>
 
                   {/* Remaining / total. The remaining figure is what the user asked for —
@@ -533,6 +560,41 @@ function ExcludeActiveToggle({ value, onChange }: { value: boolean; onChange: (v
         />
       </span>
     </button>
+  );
+}
+
+/* ── Difficulty split ────────────────────────────────────────────────────── */
+
+/**
+ * A whisper-quiet "what's left, by difficulty" line for a skill row: three
+ * tinted pips (easy = green, medium = amber, hard = miss) each with its
+ * remaining count in muted micro text. A depleted bucket dims to ink-300/400
+ * rather than disappearing, so the shape stays stable and "0 easy left" still
+ * reads. The `title` gives the full sentence for hover/screen-reader.
+ */
+function DifficultySplit({ by }: { by: ByDifficulty }) {
+  const title = `${by.easy} easy · ${by.medium} medium · ${by.hard} hard left`;
+  return (
+    <span
+      className="mt-1 flex items-center gap-2.5 text-micro tabular-nums text-ink-500"
+      title={title}
+      aria-label={title}
+    >
+      {DIFFICULTIES.map((d) => {
+        const n = by[d.value];
+        return (
+          <span key={d.value} className="flex items-center gap-1">
+            <span
+              className={cn(
+                'h-1.5 w-1.5 shrink-0 rounded-full',
+                n > 0 ? DIFF_DOT[d.value] : 'bg-ink-300',
+              )}
+            />
+            <span className={n > 0 ? 'text-ink-600' : 'text-ink-400'}>{n}</span>
+          </span>
+        );
+      })}
+    </span>
   );
 }
 

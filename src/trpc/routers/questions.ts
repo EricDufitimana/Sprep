@@ -267,7 +267,7 @@ export const questionsRouter = createTRPCRouter({
       const makeQuery = (from: number, to: number) => {
         let q = supabase
           .from('questions')
-          .select('id, domain, skill, active')
+          .select('id, domain, skill, difficulty, active')
           .eq('extraction_status', 'verified')
           .eq('section', section)
           .order('id', { ascending: true });
@@ -278,7 +278,13 @@ export const questionsRouter = createTRPCRouter({
         return q.range(from, to);
       };
 
-      let rows: { id: string; domain: string | null; skill: string | null; active: boolean | null }[];
+      let rows: {
+        id: string;
+        domain: string | null;
+        skill: string | null;
+        difficulty: string | null;
+        active: boolean | null;
+      }[];
       try {
         rows = await fetchAllRows(makeQuery);
       } catch (error) {
@@ -298,12 +304,31 @@ export const questionsRouter = createTRPCRouter({
         rows = rows.filter((r) => !done.has(r.id));
       }
 
-      const domains = new Map<string, { total: number; skills: Map<string, number> }>();
+      // Per-scope difficulty tallies, so the drill-down can show "how many
+      // easy / medium / hard are left" without a second round-trip. A row with
+      // an unknown difficulty still counts toward `total`, just not a bucket.
+      type ByDifficulty = { easy: number; medium: number; hard: number };
+      const emptyByDifficulty = (): ByDifficulty => ({ easy: 0, medium: 0, hard: 0 });
+      const bump = (b: ByDifficulty, difficulty: string | null) => {
+        if (difficulty === 'easy' || difficulty === 'medium' || difficulty === 'hard') b[difficulty] += 1;
+      };
+
+      const domains = new Map<
+        string,
+        { total: number; byDifficulty: ByDifficulty; skills: Map<string, { total: number; byDifficulty: ByDifficulty }> }
+      >();
       for (const r of rows) {
         if (!r.domain) continue;
-        const d = domains.get(r.domain) ?? { total: 0, skills: new Map<string, number>() };
+        const d =
+          domains.get(r.domain) ?? { total: 0, byDifficulty: emptyByDifficulty(), skills: new Map() };
         d.total += 1;
-        if (r.skill) d.skills.set(r.skill, (d.skills.get(r.skill) ?? 0) + 1);
+        bump(d.byDifficulty, r.difficulty);
+        if (r.skill) {
+          const s = d.skills.get(r.skill) ?? { total: 0, byDifficulty: emptyByDifficulty() };
+          s.total += 1;
+          bump(s.byDifficulty, r.difficulty);
+          d.skills.set(r.skill, s);
+        }
         domains.set(r.domain, d);
       }
 
@@ -315,8 +340,9 @@ export const questionsRouter = createTRPCRouter({
           .map(([domain, v]) => ({
             domain,
             total: v.total,
+            byDifficulty: v.byDifficulty,
             skills: Array.from(v.skills.entries())
-              .map(([skill, total]) => ({ skill, total }))
+              .map(([skill, s]) => ({ skill, total: s.total, byDifficulty: s.byDifficulty }))
               .sort((a, b) => a.skill.localeCompare(b.skill)),
           }))
           .sort((a, b) => a.domain.localeCompare(b.domain)),
