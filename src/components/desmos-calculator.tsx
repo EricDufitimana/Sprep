@@ -88,10 +88,11 @@ export function DesmosCalculator({
       .then((Desmos) => {
         if (cancelled || !hostRef.current) return;
         calc = Desmos.GraphingCalculator(hostRef.current, {
-          // Match Bluebook: no branding/settings chrome, keypad available.
+          // Match Bluebook: keypad available. Keep the settings menu (the wrench)
+          // — it's where the radians/degrees toggle lives, same as the real exam.
           keypad: true,
           expressions: true,
-          settingsMenu: false,
+          settingsMenu: true,
           border: false,
           lockViewport: false,
         });
