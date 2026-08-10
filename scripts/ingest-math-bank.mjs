@@ -20,6 +20,7 @@
 
 import { readFileSync } from 'node:fs';
 import { PrismaClient } from '@prisma/client';
+import { reconcile, buildAcceptedAnswers } from './lib/spr-answer-reconcile.mjs';
 
 /* domain code → question_domain enum value */
 const DOMAIN_MAP = {
@@ -100,7 +101,27 @@ export function mapMathQuestion(src) {
     correct_answer = accepted[0];
   }
 
+  // Guard: some source batches ship a grid-in answer as the integer truncation
+  // of the real value ("1" for "1.5") — the explanation states the true answer
+  // in plain text. Reconcile against the RAW rationale (so imaged fractions are
+  // seen as images, not misread as integers): auto-correct the high-confidence
+  // truncation case, and flag any other disagreement for review. Both are
+  // reported by main() so a bad batch can never silently mis-grade.
+  let reconciled = null;
+  if (answer_format === 'spr') {
+    const verdict = reconcile(accepted, src.rationale);
+    if (verdict.status === 'truncated') {
+      const before = correct_answer;
+      accepted = buildAcceptedAnswers(verdict.correct);
+      correct_answer = accepted[0];
+      reconciled = { kind: 'fixed', extId, from: before, to: correct_answer };
+    } else if (verdict.status === 'mismatch') {
+      reconciled = { kind: 'review', extId, stored: verdict.stored.join('|'), stated: verdict.correct };
+    }
+  }
+
   return {
+    reconciled,
     row: {
       external_id: extId,
       domain,
@@ -193,6 +214,8 @@ async function main() {
 
   const report = { total: source.length, inserted: 0, mcq: 0, spr: 0, duplicates: 0, skipped: 0, failures: 0, reasons: {} };
   const bump = (k) => (report.reasons[k] = (report.reasons[k] || 0) + 1);
+  const reconciledFixed = [];
+  const reconciledReview = [];
 
   for (const src of source) {
     let mapped;
@@ -208,6 +231,8 @@ async function main() {
       bump(mapped.skip);
       continue;
     }
+    if (mapped.reconciled?.kind === 'fixed') reconciledFixed.push(mapped.reconciled);
+    else if (mapped.reconciled?.kind === 'review') reconciledReview.push(mapped.reconciled);
     const r = mapped.row;
     if (r.external_id && seen.has(r.external_id)) {
       if (opts.update && !opts.dryRun) {
@@ -281,6 +306,14 @@ async function main() {
   if (Object.keys(report.reasons).length) {
     console.log('reasons:');
     for (const [k, v] of Object.entries(report.reasons)) console.log(`  ${k}: ${v}`);
+  }
+  if (reconciledFixed.length) {
+    console.log(`\nSPR answers auto-corrected from explanation (${reconciledFixed.length}):`);
+    for (const f of reconciledFixed) console.log(`  ${f.extId}: "${f.from}" → "${f.to}"`);
+  }
+  if (reconciledReview.length) {
+    console.log(`\n⚠ SPR answers disagreeing with their explanation — review (${reconciledReview.length}):`);
+    for (const m of reconciledReview) console.log(`  ${m.extId}: stored [${m.stored}] vs stated "${m.stated}"`);
   }
   console.log('==========================================================');
 }
