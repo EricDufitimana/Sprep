@@ -588,10 +588,14 @@ function findOptionIndices(lines: string[]): [number, number, number, number] | 
 // bolded, italicised, or underlined keeps that emphasis. `RichText` on the
 // client understands a small tag whitelist; this collapses mammoth's output to
 // exactly that: block ends become newlines, list items get a "• " marker,
-// bold/italic/underline/sub/sup runs and <img> are kept, everything else drops.
+// bold/italic/underline/sub/sup runs, tables, and <img> are kept, everything
+// else drops.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const KEEP_TAGS = new Set(['strong', 'em', 'u', 'sub', 'sup', 'br', 'img']);
+const KEEP_TAGS = new Set([
+  'strong', 'em', 'u', 'sub', 'sup', 'br', 'img',
+  'table', 'caption', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'colgroup',
+]);
 
 /** Only the inline formatting the viewer renders; used to clean text for the
  *  layout-inferring parsers, which reason over plain prose. */
@@ -628,10 +632,10 @@ function decodeEntities(s: string): string {
 function htmlToRichText(html: string): string {
   let s = html;
   s = s.replace(/<(script|style)[\s\S]*?<\/\1>/gi, '');
-  // Block boundaries become newlines; list items carry a bullet.
-  s = s.replace(/<\/(?:p|div|h[1-6]|li|tr|blockquote)>/gi, '\n');
+  // Block boundaries become newlines; list items carry a bullet. Table tags are
+  // left intact (kept in the whitelist) so the viewer can render a real table.
+  s = s.replace(/<\/(?:p|div|h[1-6]|li|blockquote)>/gi, '\n');
   s = s.replace(/<li\b[^>]*>/gi, '• ');
-  s = s.replace(/<\/t[dh]>/gi, ' ');
   s = s.replace(/<br\s*\/?>/gi, '\n');
   // Fold bold/italic aliases onto the canonical tags the viewer keys on.
   s = s.replace(/<(\/?)b\b[^>]*>/gi, '<$1strong>').replace(/<(\/?)i\b[^>]*>/gi, '<$1em>');

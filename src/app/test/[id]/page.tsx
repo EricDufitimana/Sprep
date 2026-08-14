@@ -417,9 +417,9 @@ export default function TestPage() {
               description={(q as { visual_data?: string | null }).visual_data}
             />
             {q.passage && (
-              <p className="dsat-text whitespace-pre-line">
+              <div className="dsat-text whitespace-pre-line">
                 <RichText>{q.passage}</RichText>
-              </p>
+              </div>
             )}
           </section>
           )}
