@@ -11,6 +11,7 @@ import { type ReactNode } from 'react';
  *   <sub>           subscript — chemical formulae (H<sub>2</sub>O)
  *   <sup>           superscript — units and exponents (cm<sup>2</sup>)
  *   <br>            explicit line break
+ *   <img src=…>     inline figure — only http(s) or data:image sources render
  *   "\n"            line break — paragraph/list boundaries are stored as newlines
  *   "• "            list bullets (added at ingest for <li> items)
  *
@@ -23,8 +24,23 @@ export function RichText({ children }: { children: string | null | undefined }) 
   return <>{parseRich(children ?? '')}</>;
 }
 
-/** Void + container tags we understand. `\s*\/?` tolerates `<br>`, `<br/>`, `<br />`. */
-const TAG_RE = /<(\/?)(strong|b|em|i|u|sub|sup|br)\s*\/?>/gi;
+/**
+ * Container/void tags we understand. `\s*\/?` tolerates `<br>`, `<br/>`, `<br />`;
+ * `<img …>` is matched whole so its attributes can be read out of group 3.
+ */
+const TAG_RE = /<(?:(\/?)(strong|b|em|i|u|sub|sup|br)\s*\/?|img\b([^>]*?)\/?)>/gi;
+
+/** Pull one attribute's value out of an `<img>` tag's attribute string. */
+function attr(attrs: string, name: string): string | null {
+  const m = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, 'i').exec(attrs);
+  return m ? (m[2] ?? m[3] ?? '') : null;
+}
+
+/** Only same-origin-safe image sources render; anything else is dropped. */
+function safeSrc(src: string | null): string | null {
+  if (!src) return null;
+  return /^(https?:\/\/|data:image\/)/i.test(src.trim()) ? src.trim() : null;
+}
 
 const WRAP: Record<string, (key: number, kids: ReactNode[]) => ReactNode> = {
   strong: (key, kids) => <strong key={key} className="font-bold">{kids}</strong>,
@@ -64,6 +80,23 @@ function parseRich(text: string): ReactNode[] {
   while ((m = TAG_RE.exec(text))) {
     emitText(text.slice(last, m.index));
     last = TAG_RE.lastIndex;
+
+    // `<img …>` — matched whole; group 3 is its attribute string.
+    if (m[3] !== undefined) {
+      const src = safeSrc(attr(m[3], 'src'));
+      if (src) {
+        const alt = attr(m[3], 'alt') ?? '';
+        stack[stack.length - 1].children.push(
+          <img
+            key={nextKey()}
+            src={src}
+            alt={alt}
+            className="my-2 block h-auto max-w-full rounded"
+          />,
+        );
+      }
+      continue;
+    }
 
     const tag = m[2].toLowerCase();
     if (tag === 'br') {

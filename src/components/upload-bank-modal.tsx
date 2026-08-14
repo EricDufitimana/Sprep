@@ -69,9 +69,9 @@ export function UploadBankModal({ open, onClose }: UploadBankModalProps) {
 
   const submit = async () => {
     setError(null);
-    if (!file) return setError('Choose the answers PDF.');
+    if (!file) return setError('Choose a PDF, Word, or JSON file.');
 
-    const bankName = name.trim() || file.name.replace(/\.(pdf|docx?)$/i, '');
+    const bankName = name.trim() || file.name.replace(/\.(pdf|docx?|json)$/i, '');
 
     setPhase('uploading');
     try {
@@ -81,13 +81,22 @@ export function UploadBankModal({ open, onClose }: UploadBankModalProps) {
       if (!uid) throw new Error('Your session expired. Sign in again.');
 
       // Path is namespaced by user id — that's what the bucket's RLS checks.
-      // Keep the original extension so the server can tell PDF from Word.
+      // Keep the original extension so the server can tell PDF from Word from JSON.
       const path = `${uid}/${Date.now()}/${file.name.replace(/[^\w.-]/g, '_')}`;
       setPct(30);
 
+      // Derive the content type from the extension so the server's kind
+      // detection is right even when the browser leaves file.type blank.
+      const byExt = /\.json$/i.test(file.name)
+        ? 'application/json'
+        : /\.docx$/i.test(file.name)
+          ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          : /\.pdf$/i.test(file.name)
+            ? 'application/pdf'
+            : '';
       const { error: upErr } = await supabase.storage
         .from('question-papers')
-        .upload(path, file, { upsert: false, contentType: file.type || 'application/pdf' });
+        .upload(path, file, { upsert: false, contentType: file.type || byExt || 'application/pdf' });
 
       if (upErr) throw new Error(`Upload failed: ${upErr.message}`);
 
@@ -212,7 +221,7 @@ function FilePick({
   const [dragging, setDragging] = useState(false);
 
   const accepts = (f: File | undefined | null): f is File =>
-    !!f && /\.(pdf|docx?)$/i.test(f.name);
+    !!f && /\.(pdf|docx?|json)$/i.test(f.name);
 
   return (
     <div>
@@ -245,17 +254,17 @@ function FilePick({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-body text-ink-900">
-            {file ? file.name : 'Choose a PDF or Word file, or drop one here'}
+            {file ? file.name : 'Choose a PDF, Word, or JSON file, or drop one here'}
           </span>
           <span className="block text-micro text-ink-400">
-            {file ? `${(file.size / 1024).toFixed(0)} KB` : 'PDF or Word (.pdf, .docx)'}
+            {file ? `${(file.size / 1024).toFixed(0)} KB` : 'PDF, Word, or JSON (.pdf, .docx, .json)'}
           </span>
         </span>
       </button>
       <input
         ref={inputRef as React.RefObject<HTMLInputElement>}
         type="file"
-        accept="application/pdf,.pdf,.doc,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        accept="application/pdf,.pdf,.doc,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.json,application/json"
         className="hidden"
         onChange={(e) => onPick(e.target.files?.[0] ?? null)}
       />

@@ -236,7 +236,10 @@ function parseOptions(body: string): { options: ParsedOption[]; stemEnd: number 
  * Recognised by its `Question ID <hex>` headers and `Correct Answer: <A-D>`
  * key lines. This is the format the two built-in SAT banks are seeded from.
  */
-function parseCollegeBoardExport(text: string): ParseResult {
+function parseCollegeBoardExport(rawText: string): ParseResult {
+  // This handler reasons over plain prose; drop any inline formatting a .docx
+  // source carried in so its regexes see clean text.
+  const text = stripInlineTags(rawText);
   const headerRe = /Question ID ([0-9a-f]{6,12})/g;
   const marks: { id: string; start: number; headEnd: number }[] = [];
   let m: RegExpExecArray | null;
@@ -432,8 +435,8 @@ function splitPassageAndStem(flowed: string): { passage: string; stem: string } 
   };
 }
 
-function parseLabeledSet(text: string): ParseResult {
-  const cleaned = stripPageFurniture(text);
+function parseLabeledSet(rawText: string): ParseResult {
+  const cleaned = stripPageFurniture(stripInlineTags(rawText));
 
   // Block starts: a `QUESTION <n>` header. The rest of that line carries the
   // metadata (domain, skill, difficulty), so capture it whole.
@@ -579,11 +582,418 @@ function findOptionIndices(lines: string[]): [number, number, number, number] | 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Rich text: mammoth HTML → the viewer's formatting whitelist
+//
+// The .docx text layer is read as HTML (not raw text) so a word the author
+// bolded, italicised, or underlined keeps that emphasis. `RichText` on the
+// client understands a small tag whitelist; this collapses mammoth's output to
+// exactly that: block ends become newlines, list items get a "• " marker,
+// bold/italic/underline/sub/sup runs and <img> are kept, everything else drops.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const KEEP_TAGS = new Set(['strong', 'em', 'u', 'sub', 'sup', 'br', 'img']);
+
+/** Only the inline formatting the viewer renders; used to clean text for the
+ *  layout-inferring parsers, which reason over plain prose. */
+const INLINE_TAG_RE = /<\/?(?:strong|b|em|i|u|sub|sup|br)\s*\/?>|<img\b[^>]*>/gi;
+
+function stripInlineTags(s: string): string {
+  return s.replace(INLINE_TAG_RE, '');
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&mdash;/gi, '—')
+    .replace(/&ndash;/gi, '–')
+    .replace(/&hellip;/gi, '…')
+    .replace(/&lsquo;/gi, '‘')
+    .replace(/&rsquo;/gi, '’')
+    .replace(/&ldquo;/gi, '“')
+    .replace(/&rdquo;/gi, '”')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, d) => {
+      try {
+        return String.fromCodePoint(Number(d));
+      } catch {
+        return '';
+      }
+    })
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&');
+}
+
+function htmlToRichText(html: string): string {
+  let s = html;
+  s = s.replace(/<(script|style)[\s\S]*?<\/\1>/gi, '');
+  // Block boundaries become newlines; list items carry a bullet.
+  s = s.replace(/<\/(?:p|div|h[1-6]|li|tr|blockquote)>/gi, '\n');
+  s = s.replace(/<li\b[^>]*>/gi, '• ');
+  s = s.replace(/<\/t[dh]>/gi, ' ');
+  s = s.replace(/<br\s*\/?>/gi, '\n');
+  // Fold bold/italic aliases onto the canonical tags the viewer keys on.
+  s = s.replace(/<(\/?)b\b[^>]*>/gi, '<$1strong>').replace(/<(\/?)i\b[^>]*>/gi, '<$1em>');
+  // Reduce every <img> to a bare src/alt tag; drop sourceless ones.
+  s = s.replace(/<img\b[^>]*>/gi, (tag) => {
+    const src = /\bsrc\s*=\s*("([^"]*)"|'([^']*)')/i.exec(tag);
+    const url = (src?.[2] ?? src?.[3] ?? '').trim();
+    if (!url) return '';
+    const alt = /\balt\s*=\s*("([^"]*)"|'([^']*)')/i.exec(tag);
+    const altv = (alt?.[2] ?? alt?.[3] ?? '').replace(/"/g, '');
+    return `\n<img src="${url}"${altv ? ` alt="${altv}"` : ''}>\n`;
+  });
+  // Drop any tag outside the whitelist (our normalised <img> survives).
+  s = s.replace(/<\/?([a-zA-Z0-9]+)[^>]*>/g, (m, name) =>
+    KEEP_TAGS.has(String(name).toLowerCase()) ? m : '',
+  );
+  s = decodeEntities(s);
+  return s
+    .split('\n')
+    .map((l) => l.replace(/[ \t]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Labeled-field format — the "safe", deterministic path
+//
+// A human-authored document (Word, or a JSON export) where every part of a
+// question is introduced by an explicit label:
+//
+//   Passage: <stimulus…>                 (optional)
+//   Question text: <stem…>
+//   A: <option A…>
+//   B: <option B…>
+//   C: <option C…>
+//   D: <option D…>
+//   Answer: B
+//   Explanation: <rationale…>            (optional)
+//   Domain: … / Skill: … / Difficulty: … (optional)
+//
+// Because the boundaries are labelled rather than inferred, the passage and the
+// stem can't bleed into each other the way a free-text PDF's do — the failure
+// that put the whole question on one bolded side. Inline emphasis carried over
+// from the .docx (via `htmlToRichText`) is preserved verbatim in each field.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type LabeledField =
+  | 'passage'
+  | 'question_text'
+  | 'A'
+  | 'B'
+  | 'C'
+  | 'D'
+  | 'answer'
+  | 'explanation'
+  | 'domain'
+  | 'skill'
+  | 'difficulty';
+
+/** Most-specific first, so "Difficulty"/"Domain" can't be read as option D. */
+const LABEL_PATTERNS: [LabeledField, RegExp][] = [
+  ['question_text', /^(?:question\s*text|question|stem|prompt)\s*[:.\-–—]/i],
+  ['passage', /^(?:passage|stimulus|context)\s*[:.\-–—]/i],
+  ['answer', /^(?:correct\s*answer|answer|correct|key)\s*[:.\-–—]/i],
+  ['explanation', /^(?:explanation|rationale|reason|why)\s*[:.\-–—]/i],
+  ['domain', /^domain\s*[:.\-–—]/i],
+  ['skill', /^skill\s*[:.\-–—]/i],
+  ['difficulty', /^difficulty\s*[:.\-–—]/i],
+  ['A', /^(?:option\s*)?a\s*[:).\]\-–—]/i],
+  ['B', /^(?:option\s*)?b\s*[:).\]\-–—]/i],
+  ['C', /^(?:option\s*)?c\s*[:).\]\-–—]/i],
+  ['D', /^(?:option\s*)?d\s*[:).\]\-–—]/i],
+];
+
+const LEADING_OPEN_TAG = /^<(?:strong|b|em|i|u|sub|sup)>\s*/i;
+const LEADING_CLOSE_TAG = /^\s*<\/(?:strong|b|em|i|u|sub|sup)>\s*/i;
+
+/**
+ * If a line opens a labelled field, return the field and the text after the
+ * label. A label may itself be emphasised in the source
+ * (`<strong>Passage:</strong> …`), so leading inline tags are peeled off before
+ * matching and the label's own closing tag is dropped from the value.
+ */
+function readLabel(line: string): { field: LabeledField; value: string } | null {
+  let s = line.replace(/^\s+/, '');
+  while (LEADING_OPEN_TAG.test(s)) s = s.replace(LEADING_OPEN_TAG, '');
+  for (const [field, re] of LABEL_PATTERNS) {
+    const m = re.exec(s);
+    if (m) {
+      const value = s.slice(m[0].length).replace(LEADING_CLOSE_TAG, '');
+      return { field, value };
+    }
+  }
+  return null;
+}
+
+/** Trim and tidy a field's text while keeping its inline tags and line breaks. */
+function normalizeField(s: string): string {
+  return s
+    .split('\n')
+    .map((l) => l.replace(/[ \t]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^\n+|\n+$/g, '')
+    .trim();
+}
+
+interface FieldAcc {
+  passage: string[];
+  question_text: string[];
+  A: string[];
+  B: string[];
+  C: string[];
+  D: string[];
+  answer: string[];
+  explanation: string[];
+  domain: string[];
+  skill: string[];
+  difficulty: string[];
+  active: LabeledField | null;
+  touched: boolean;
+}
+
+function newAcc(): FieldAcc {
+  return {
+    passage: [],
+    question_text: [],
+    A: [],
+    B: [],
+    C: [],
+    D: [],
+    answer: [],
+    explanation: [],
+    domain: [],
+    skill: [],
+    difficulty: [],
+    active: null,
+    touched: false,
+  };
+}
+
+/** Fields whose value may wrap onto following unlabelled lines. */
+const CONTINUABLE: LabeledField[] = [
+  'passage',
+  'question_text',
+  'A',
+  'B',
+  'C',
+  'D',
+  'explanation',
+];
+
+function parseLabeledFields(text: string): ParseResult {
+  const cleaned = stripPageFurniture(text);
+  const lines = cleaned.split('\n');
+
+  const questions: ParsedQuestion[] = [];
+  const problems: string[] = [];
+  let acc = newAcc();
+
+  const startedBody = (a: FieldAcc) =>
+    a.A.length > 0 || a.B.length > 0 || a.C.length > 0 || a.D.length > 0 || a.answer.length > 0;
+
+  const flush = () => {
+    if (!acc.touched) return;
+    const built = buildLabeled(acc, questions.length + 1);
+    if ('error' in built) problems.push(built.error);
+    else questions.push(built.question);
+    acc = newAcc();
+  };
+
+  const headerRe = /^\s*(?:question|q)\s*#?\s*\d+\s*[).:\-]?\s*$/i;
+
+  for (const line of lines) {
+    // A bare "Question 3" / "Q3" header (never "Question text:") ends a block.
+    if (headerRe.test(stripInlineTags(line))) {
+      flush();
+      continue;
+    }
+
+    const label = readLabel(line);
+    if (label) {
+      const { field, value } = label;
+      // A fresh passage always opens a question; a fresh stem opens one unless
+      // it's the stem for a passage already in progress.
+      if (
+        (field === 'passage' &&
+          (acc.passage.length > 0 || acc.question_text.length > 0 || startedBody(acc))) ||
+        (field === 'question_text' && (acc.question_text.length > 0 || startedBody(acc)))
+      ) {
+        flush();
+      }
+      acc.touched = true;
+      acc.active = field;
+      if (value.trim()) acc[field].push(value);
+      continue;
+    }
+
+    // Continuation of the field currently being read.
+    if (acc.active && CONTINUABLE.includes(acc.active) && line.trim()) {
+      acc[acc.active].push(line);
+    }
+  }
+  flush();
+
+  return { questions, problems };
+}
+
+function buildLabeled(
+  acc: FieldAcc,
+  position: number,
+): { question: ParsedQuestion } | { error: string } {
+  const label = `Question ${position}`;
+  const question_text = normalizeField(acc.question_text.join('\n'));
+  const passage = normalizeField(acc.passage.join('\n'));
+
+  if (!question_text) return { error: `${label}: no "Question text:" label found` };
+
+  const options: ParsedOption[] = LETTERS.map((letter) => ({
+    letter,
+    text: normalizeField(acc[letter].join('\n')),
+  }));
+  const missing = options.filter((o) => !o.text).map((o) => o.letter);
+  if (missing.length) {
+    return { error: `${label}: missing option${missing.length > 1 ? 's' : ''} ${missing.join(', ')}` };
+  }
+
+  const answerMatch = /([A-D])/i.exec(stripInlineTags(acc.answer.join(' ')));
+  if (!answerMatch) return { error: `${label}: no answer (A–D) given` };
+  const correct = answerMatch[1].toUpperCase() as ParsedOption['letter'];
+  if (!options.some((o) => o.letter === correct && o.text)) {
+    return { error: `${label}: answer ${correct} has no matching option` };
+  }
+
+  const difficultyRaw = stripInlineTags(acc.difficulty.join(' ')).toLowerCase();
+  const difficulty =
+    (['easy', 'medium', 'hard'] as const).find((d) => difficultyRaw.includes(d)) ?? null;
+  const skill = stripInlineTags(acc.skill.join(' ')).replace(/\s+/g, ' ').trim();
+
+  return {
+    question: {
+      external_id: `l${position}`,
+      position,
+      passage: passage || null,
+      question_text,
+      options,
+      correct_answer: correct,
+      explanation: normalizeField(acc.explanation.join('\n')) || null,
+      difficulty,
+      domain: normalizeDomain(stripInlineTags(acc.domain.join(' '))),
+      skill: skill || null,
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JSON bank format — an uploaded .json file
+//
+// The most reliable path of all: the questions arrive already structured, so
+// there is no layout to infer. Field text may carry the same inline-formatting
+// whitelist as everything else. `options` is accepted as an array of
+// {letter,text}, an array of plain strings (A–D in order), or an object keyed
+// by letter; the answer as `correct_answer` or `answer`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function coerceJsonOptions(raw: unknown): ParsedOption[] {
+  if (Array.isArray(raw)) {
+    if (raw.length > 0 && typeof raw[0] === 'object' && raw[0] !== null) {
+      const out: ParsedOption[] = [];
+      for (const o of raw as Record<string, unknown>[]) {
+        const letter = String(o?.letter ?? '').toUpperCase();
+        if (!LETTERS.includes(letter as ParsedOption['letter'])) continue;
+        out.push({ letter: letter as ParsedOption['letter'], text: normalizeField(String(o?.text ?? '')) });
+      }
+      return out;
+    }
+    return (raw as unknown[]).slice(0, 4).map((t, i) => ({
+      letter: LETTERS[i],
+      text: normalizeField(String(t ?? '')),
+    }));
+  }
+  if (raw && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    return LETTERS.filter((l) => obj[l] != null || obj[l.toLowerCase()] != null).map((l) => ({
+      letter: l,
+      text: normalizeField(String(obj[l] ?? obj[l.toLowerCase()] ?? '')),
+    }));
+  }
+  return [];
+}
+
+export function parseJsonBank(text: string): ParseResult {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return { questions: [], problems: ['File is not valid JSON'] };
+  }
+  const arr = Array.isArray(data)
+    ? data
+    : ((data as { questions?: unknown[] })?.questions ?? []);
+  if (!Array.isArray(arr)) return { questions: [], problems: ['JSON has no "questions" array'] };
+
+  const questions: ParsedQuestion[] = [];
+  const problems: string[] = [];
+
+  for (const raw of arr as Record<string, unknown>[]) {
+    const n = questions.length + 1;
+    const question_text = normalizeField(
+      String(raw?.question_text ?? raw?.question ?? raw?.stem ?? ''),
+    );
+    const passage = normalizeField(String(raw?.passage ?? raw?.stimulus ?? ''));
+    const options = coerceJsonOptions(raw?.options ?? raw?.choices);
+    const correct = (String(raw?.correct_answer ?? raw?.answer ?? '')
+      .toUpperCase()
+      .match(/[A-D]/) ?? [''])[0];
+
+    if (!question_text) {
+      problems.push(`Question ${n}: missing question_text`);
+      continue;
+    }
+    if (options.length !== 4 || options.some((o) => !o.text)) {
+      problems.push(`Question ${n}: needs four non-empty options`);
+      continue;
+    }
+    if (!LETTERS.includes(correct as ParsedOption['letter'])) {
+      problems.push(`Question ${n}: missing or invalid correct answer`);
+      continue;
+    }
+    if (!options.some((o) => o.letter === correct && o.text)) {
+      problems.push(`Question ${n}: answer ${correct} has no matching option`);
+      continue;
+    }
+
+    const diff = String(raw?.difficulty ?? '').toLowerCase();
+    questions.push({
+      external_id: String(raw?.external_id ?? `j${n}`),
+      position: n,
+      passage: passage || null,
+      question_text,
+      options,
+      correct_answer: correct as ParsedOption['letter'],
+      explanation: normalizeField(String(raw?.explanation ?? raw?.rationale ?? '')) || null,
+      difficulty: (['easy', 'medium', 'hard'].includes(diff) ? diff : null) as QuestionDifficulty | null,
+      domain: raw?.domain ? normalizeDomain(String(raw.domain)) : null,
+      skill: raw?.skill ? String(raw.skill).replace(/\s+/g, ' ').trim() : null,
+    });
+  }
+
+  return { questions, problems };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Dispatch + optional AI fallback
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Every deterministic format handler, tried against one text layer. */
+/** Every deterministic format handler, tried against one text layer. The
+ *  labelled-field parser is listed first as the preferred, most reliable format;
+ *  `parseText` still keeps whichever handler recognises the most questions. */
 const TEXT_PARSERS: ((text: string) => ParseResult)[] = [
+  parseLabeledFields,
   parseCollegeBoardExport,
   parseLabeledSet,
 ];
@@ -607,14 +1017,23 @@ export function parseText(text: string): ParseResult {
   return results[0] ?? { questions: [], problems: [] };
 }
 
-/** Extract the text layer from a .docx via mammoth (dynamically imported). */
+/**
+ * Extract a .docx as formatting-preserving text via mammoth (dynamically
+ * imported). Read as HTML rather than raw text so bold/italic/underline survive,
+ * then collapsed to the viewer's tag whitelist. `u => u` keeps underline runs,
+ * which mammoth otherwise drops — underline is load-bearing for SAT R&W ("the
+ * underlined sentence the question refers to").
+ */
 async function extractDocxText(buffer: Buffer): Promise<string> {
   const mod = await import('mammoth');
   const mammoth = (mod.default ?? mod) as {
-    extractRawText: (o: { buffer: Buffer }) => Promise<{ value: string }>;
+    convertToHtml: (
+      o: { buffer: Buffer },
+      opts?: { styleMap?: string[] },
+    ) => Promise<{ value: string }>;
   };
-  const { value } = await mammoth.extractRawText({ buffer });
-  return value;
+  const { value } = await mammoth.convertToHtml({ buffer }, { styleMap: ['u => u'] });
+  return htmlToRichText(value);
 }
 
 const OPENAI_JSON_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
@@ -639,7 +1058,11 @@ async function aiParseText(text: string): Promise<ParseResult> {
     'correct_answer:"A"|"B"|"C"|"D", explanation?, ' +
     'difficulty?:"easy"|"medium"|"hard", ' +
     'domain?:"information_and_ideas"|"craft_and_structure"|"expression_of_ideas"|"standard_english_conventions", ' +
-    'skill?}. Preserve the passage and stem verbatim. If a field is unknown, omit it. ' +
+    'skill?}. CRITICAL: "passage" is the stimulus the question is ABOUT (the reading text, or the ' +
+    'sentence containing the blank); "question_text" is ONLY the actual instruction/question the ' +
+    'student answers (e.g. "Which choice completes the text..." or "Based on the text, ..."). Never ' +
+    'put the stimulus inside question_text, and never leave passage empty when a stimulus exists. ' +
+    'Preserve the passage and stem verbatim. If a field is unknown, omit it. ' +
     'Only include questions whose correct answer is stated in the document.';
 
   try {
@@ -683,16 +1106,27 @@ function coerceAiQuestions(parsed: unknown): ParseResult {
       options.push({ letter: letter as ParsedOption['letter'], text: squash(String(o?.text ?? '')) });
     }
     const correct = String(item.correct_answer ?? '').toUpperCase();
-    const stem = squash(String(item.question_text ?? ''));
+    let stem = squash(String(item.question_text ?? ''));
     if (options.length !== 4 || !LETTERS.includes(correct as (typeof LETTERS)[number]) || !stem) {
       problems.push('AI: skipped an incomplete question');
       continue;
+    }
+    // Guard against the model dumping the whole stimulus into the stem and
+    // leaving passage empty — that renders the entire question on one bolded
+    // side. Recover the passage by splitting off the trailing question sentence.
+    let passage = item.passage ? squash(String(item.passage)) : null;
+    if (!passage) {
+      const split = splitPassageAndStem(reflow(stem));
+      if (split.passage && split.stem) {
+        passage = split.passage;
+        stem = split.stem;
+      }
     }
     const diff = String(item.difficulty ?? '').toLowerCase();
     questions.push({
       external_id: `ai${questions.length + 1}`,
       position: questions.length + 1,
-      passage: item.passage ? squash(String(item.passage)) : null,
+      passage,
       question_text: stem,
       options,
       correct_answer: correct as ParsedQuestion['correct_answer'],
@@ -707,13 +1141,14 @@ function coerceAiQuestions(parsed: unknown): ParseResult {
 }
 
 /** The kind of document being imported. */
-export type DocumentKind = 'pdf' | 'docx';
+export type DocumentKind = 'pdf' | 'docx' | 'json';
 
 /**
  * Decide the document kind from a MIME type or filename. Defaults to PDF.
  */
 export function detectDocumentKind(hint: string | null | undefined): DocumentKind {
   const h = (hint ?? '').toLowerCase();
+  if (h.includes('json') || h.endsWith('.json')) return 'json';
   if (h.includes('word') || h.endsWith('.docx') || h.includes('officedocument.wordprocessing')) {
     return 'docx';
   }
@@ -732,6 +1167,11 @@ export async function parseAnswerDocument(
   opts: { kind?: DocumentKind; useAi?: boolean } = {},
 ): Promise<ParseResult> {
   const kind = opts.kind ?? 'pdf';
+
+  // A .json upload is already structured — parse it directly, no layout to infer
+  // and no AI pass.
+  if (kind === 'json') return parseJsonBank(buffer.toString('utf8'));
+
   const text = kind === 'docx' ? await extractDocxText(buffer) : await extractText(buffer);
 
   const deterministic = parseText(text);
