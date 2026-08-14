@@ -18,6 +18,15 @@ interface UploadBankModalProps {
 
 type Phase = 'form' | 'uploading' | 'parsing' | 'done';
 
+/** Human label for the kind of file, from its extension. */
+function fileKindLabel(name: string | undefined | null): string {
+  if (!name) return 'file';
+  if (/\.json$/i.test(name)) return 'JSON';
+  if (/\.docx?$/i.test(name)) return 'Word file';
+  if (/\.pdf$/i.test(name)) return 'PDF';
+  return 'file';
+}
+
 /**
  * One file in, a bank out.
  *
@@ -135,7 +144,7 @@ export function UploadBankModal({ open, onClose }: UploadBankModalProps) {
             inputRef={fileRef}
             onPick={(f) => {
               setFile(f);
-              if (f && !name.trim()) setName(f.name.replace(/\.(pdf|docx?)$/i, ''));
+              if (f && !name.trim()) setName(f.name.replace(/\.(pdf|docx?|json)$/i, ''));
             }}
           />
 
@@ -148,11 +157,11 @@ export function UploadBankModal({ open, onClose }: UploadBankModalProps) {
           />
 
           <p className="rounded-control bg-blue-wash px-3 py-2 text-small text-ink-500">
-            Upload a <strong className="font-medium text-ink-700">PDF or Word</strong> file that
-            includes each question’s options, the correct answer, and ideally an explanation. A
-            College Board <strong className="font-medium text-ink-700">Answers</strong> export and a
-            labelled practice set both work — questions, options, answers, domains, and skills are
-            read automatically.
+            Upload a <strong className="font-medium text-ink-700">PDF, Word, or JSON</strong> file
+            that includes each question’s options, the correct answer, and ideally an explanation. A
+            College Board <strong className="font-medium text-ink-700">Answers</strong> export, a
+            labelled practice set, and a structured JSON file all work — questions, options, answers,
+            domains, and skills are read automatically.
           </p>
 
           {error && (
@@ -166,7 +175,7 @@ export function UploadBankModal({ open, onClose }: UploadBankModalProps) {
       {(phase === 'uploading' || phase === 'parsing') && (
         <div className="space-y-3 py-4">
           <p className="text-body text-ink-700">
-            {phase === 'uploading' ? 'Uploading the PDF…' : 'Reading the questions…'}
+            {phase === 'uploading' ? `Uploading the ${fileKindLabel(file?.name)}…` : 'Reading the questions…'}
           </p>
           <ProgressBar value={phase === 'parsing' ? 100 : pct} label="Progress" />
           {phase === 'parsing' && (
