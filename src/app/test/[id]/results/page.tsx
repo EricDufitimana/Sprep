@@ -125,6 +125,10 @@ export default function ResultsPage() {
                   section: q.section,
                   answerFormat: q.answerFormat,
                 }}
+                // Questions they got right have nothing to reveal — show them
+                // already confirmed, no button. Missed/blank keep the reveal.
+                showReveal={!q.isCorrect}
+                defaultRevealed={q.isCorrect}
               />
               {!q.isCorrect && (
                 <DiagnosisPicker

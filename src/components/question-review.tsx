@@ -41,15 +41,25 @@ function QText({ children, isMath, block = true }: { children: string | null | u
  * The reveal is one click — no note to write first. Hiding it by default still
  * gives you the beat to re-attempt the question in your head, which is where
  * the learning is, but nothing blocks you from just looking.
+ *
+ * `showReveal` and `defaultRevealed` let a surface skip the button: a question
+ * the student already got right has nothing to hide, so results show it revealed
+ * with no button, while missed ones keep the re-attempt beat.
  */
 export function QuestionReview({
   question,
   className,
+  showReveal = true,
+  defaultRevealed = false,
 }: {
   question: ReviewQuestion;
   className?: string;
+  /** Whether the "Reveal answer" button may appear (when still hidden). */
+  showReveal?: boolean;
+  /** Start with the answer already shown (e.g. a question answered correctly). */
+  defaultRevealed?: boolean;
 }) {
-  const [revealed, setRevealed] = useState(false);
+  const [revealed, setRevealed] = useState(defaultRevealed);
   const options = (question.options as Opt[]) ?? [];
   const isMath = question.section === 'math';
   const isSpr = question.answerFormat === 'spr';
@@ -112,12 +122,7 @@ export function QuestionReview({
       </div>
       )}
 
-      {!revealed ? (
-        <Button size="sm" className="mt-3" onClick={() => setRevealed(true)}>
-          Reveal answer
-          <Icon name="chevron-down" className="text-small" />
-        </Button>
-      ) : (
+      {revealed ? (
         question.explanation && (
           <div className="mt-3 rounded-control bg-paper px-3 py-2.5">
             <p className="mb-1 text-micro font-medium uppercase tracking-wide text-ink-400">
@@ -128,7 +133,12 @@ export function QuestionReview({
             </div>
           </div>
         )
-      )}
+      ) : showReveal ? (
+        <Button size="sm" className="mt-3" onClick={() => setRevealed(true)}>
+          Reveal answer
+          <Icon name="chevron-down" className="text-small" />
+        </Button>
+      ) : null}
     </div>
   );
 }
