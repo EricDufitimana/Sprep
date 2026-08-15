@@ -9,7 +9,7 @@ import { Reveal } from '@/components/reveal';
 import { RichText } from '@/components/rich-text';
 import { Button } from '@/components/ui/button';
 import { Card, CardBody } from '@/components/ui/card';
-import { Icon } from '@/components/ui/icon';
+import { Icon, type IconName } from '@/components/ui/icon';
 import { LoadingDots } from '@/components/ui/loading-dots';
 import { Input } from '@/components/ui/input';
 import { Modal } from '@/components/ui/modal';
@@ -20,7 +20,7 @@ import { SatReferenceSheet } from '@/components/sat-reference-sheet';
 import { cn } from '@/lib/utils';
 import { domainLabel } from '@/lib/labels';
 import { useSection, SECTION_LABELS, type Section } from '@/lib/section';
-import { domainOrderFor } from '@/lib/dsat';
+import { domainOrderFor, DSAT_DOMAIN_WEIGHTS, MATH_DOMAIN_WEIGHTS } from '@/lib/dsat';
 
 /**
  * Domain-browse & custom set builder — modeled on the College Board Question
@@ -839,31 +839,116 @@ function ExamModuleCard({
   onBuild: () => void;
 }) {
   return (
-    <Card className="mb-6 overflow-hidden border-blue/15 bg-blue-wash">
-      <CardBody className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue text-white shadow-sm">
-            <Icon name="grid-alt" className="text-body" />
+    <Card className="relative mb-6 overflow-hidden border-blue/12 bg-gradient-to-br from-blue-wash via-surface to-violet-tint/25">
+      <CardBody className="relative flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        {/* Pitch */}
+        <div className="min-w-0 max-w-xl">
+          <span className="inline-flex items-center gap-1.5 rounded-pill bg-blue/10 px-2.5 py-1 text-micro font-semibold uppercase tracking-[0.08em] text-blue">
+            <Icon name="alarm-clock" className="text-[10px]" />
+            Timed · Bluebook-style
           </span>
-          <div className="min-w-0">
-            <h3 className="text-h3 font-semibold text-ink-900">Build an exam module</h3>
-            <p className="mt-0.5 max-w-xl text-small text-ink-600">
-              A timed, Bluebook-style {SECTION_LABELS[section]} module drawn from the questions you
-              already have — balanced to the real SAT domain mix and ordered like the exam. Set to
-              hard by default.
-            </p>
-            <p className="mt-1 text-micro text-ink-500 tabular-nums">
-              {hardAvailable} hard question{hardAvailable === 1 ? '' : 's'} available in{' '}
-              {SECTION_LABELS[section]}
-            </p>
-          </div>
+          <h3 className="mt-2.5 text-h2 font-semibold text-ink-900">Build an exam module</h3>
+          <p className="mt-1.5 text-small text-ink-500">
+            A full {SECTION_LABELS[section]} module drawn from the questions you already have —
+            balanced to the real SAT domain mix and ordered exactly like the exam. Hard by default.
+          </p>
+          <p className="mt-2.5 flex items-center gap-1.5 text-micro text-ink-500 tabular-nums">
+            <span className={cn('h-1.5 w-1.5 rounded-full', hardAvailable > 0 ? 'bg-green' : 'bg-ink-400/60')} />
+            {hardAvailable} hard question{hardAvailable === 1 ? '' : 's'} ready
+          </p>
         </div>
-        <Button onClick={onBuild} disabled={total === 0}>
-          Build module
-          <Icon name="arrow-right" className="text-small" />
-        </Button>
+
+        {/* A little "module preview": the real domain blueprint + specs + CTA. */}
+        <div className="relative w-full shrink-0 overflow-hidden rounded-card border border-white/70 bg-white/55 p-4 shadow-[0_1px_0_rgba(0,0,0,0.02)] backdrop-blur-sm lg:w-72">
+          {/* A faint answer-bubble motif in the corner — signals "exam" quietly. */}
+          <BubbleMotif className="pointer-events-none absolute -right-5 -top-4 text-blue/[0.08]" />
+
+          <div className="relative mb-3 flex items-center justify-between">
+            <span className="text-micro font-semibold uppercase tracking-[0.08em] text-ink-500">
+              {SECTION_LABELS[section]} blueprint
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-pill bg-miss-tint px-2 py-0.5 text-micro font-semibold text-miss">
+              <Icon name="bolt" className="text-[10px]" />
+              Hard
+            </span>
+          </div>
+
+          <DomainMixBar section={section} />
+
+          <div className="mt-3 flex items-center gap-2.5 text-micro font-medium text-ink-700">
+            <span className="inline-flex items-center gap-1">
+              <Icon name="grid-alt" className="text-micro" />
+              27 questions
+            </span>
+            <span className="text-ink-400">·</span>
+            <span className="inline-flex items-center gap-1">
+              <Icon name="alarm-clock" className="text-micro" />
+              35 min
+            </span>
+          </div>
+
+          <Button className="mt-4 w-full" onClick={onBuild} disabled={total === 0}>
+            Build module
+            <Icon name="arrow-right" className="text-small" />
+          </Button>
+        </div>
       </CardBody>
     </Card>
+  );
+}
+
+/**
+ * The section's official domain split as a slim segmented bar plus a two-column
+ * legend — the same tones the domain cards use below, so the mix reads as "this
+ * is the real SAT blueprint" at a glance. Purely illustrative of the recipe.
+ */
+function DomainMixBar({ section }: { section: Section }) {
+  const weights = section === 'math' ? MATH_DOMAIN_WEIGHTS : DSAT_DOMAIN_WEIGHTS;
+  const entries = Object.entries(weights) as [string, number][];
+  return (
+    <div>
+      <div className="flex h-2.5 gap-1">
+        {entries.map(([d, w]) => (
+          <span
+            key={d}
+            className={cn('h-full rounded-[3px]', DOMAIN_TONES[d]?.accent ?? 'bg-ink-400')}
+            style={{ width: `${w * 100}%` }}
+            title={`${domainLabel(d)} · ${Math.round(w * 100)}%`}
+          />
+        ))}
+      </div>
+      <div className="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-1">
+        {entries.map(([d, w]) => (
+          <span key={d} className="flex items-center gap-1.5 text-[11px] text-ink-500">
+            <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', DOMAIN_TONES[d]?.accent ?? 'bg-ink-400')} />
+            <span className="truncate">{domainLabel(d).split(' ')[0]}</span>
+            <span className="ml-auto tabular-nums text-ink-400">{Math.round(w * 100)}%</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Decorative bubble-sheet grid: a few answer bubbles, one "filled" per row. */
+function BubbleMotif({ className }: { className?: string }) {
+  const filledPerRow = [1, 3, 0]; // which column reads as marked, per row
+  return (
+    <svg width="176" height="104" viewBox="0 0 176 104" fill="none" aria-hidden className={className}>
+      {filledPerRow.map((filled, r) =>
+        [0, 1, 2, 3].map((c) => (
+          <circle
+            key={`${r}-${c}`}
+            cx={20 + c * 44}
+            cy={20 + r * 34}
+            r="12"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            fill={c === filled ? 'currentColor' : 'none'}
+          />
+        )),
+      )}
+    </svg>
   );
 }
 

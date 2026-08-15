@@ -58,6 +58,33 @@ const MODE_TABS = [
   { value: 'untimed' as const, label: 'Untimed' },
 ];
 
+/**
+ * Sort banks newest-first and split them into rolling time buckets, so a long
+ * list reads as "what I added recently" rather than one flat wall. Empty
+ * buckets drop out, and everything past a month collapses into "Earlier".
+ */
+function groupBanksByTime(banks: Bank[]): { label: string; banks: Bank[] }[] {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const DAY = 86_400_000;
+  const buckets: { label: string; since: number }[] = [
+    { label: 'Today', since: startOfToday },
+    { label: 'This week', since: startOfToday - 7 * DAY },
+    { label: 'This month', since: startOfToday - 30 * DAY },
+    { label: 'Earlier', since: Number.NEGATIVE_INFINITY },
+  ];
+  const groups = buckets.map((b) => ({ label: b.label, banks: [] as Bank[] }));
+  const sorted = [...banks].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  );
+  for (const bank of sorted) {
+    const t = new Date(bank.created_at).getTime();
+    const idx = buckets.findIndex((b) => t >= b.since);
+    groups[idx].banks.push(bank);
+  }
+  return groups.filter((g) => g.banks.length > 0);
+}
+
 function PracticeInner() {
   const router = useRouter();
   const search = useSearchParams();
@@ -138,6 +165,105 @@ function PracticeInner() {
       : configBank.counts.verified
     : 1;
   const max = Math.max(1, pool);
+
+  // Group the banks into time buckets, and pin each bank's card tone by its
+  // position in the flattened, date-sorted order so colors stay varied and
+  // stable regardless of how the buckets fall.
+  const bankGroups = groupBanksByTime(list);
+  const toneOf = new Map(
+    bankGroups.flatMap((g) => g.banks).map((b, i) => [b.id, CARD_TONES[i % CARD_TONES.length]]),
+  );
+
+  const renderBankCard = (bank: Bank, tone: (typeof CARD_TONES)[number]) => {
+    const verified = bank.counts.verified;
+    const pct = verified > 0 ? (bank.attempted / verified) * 100 : 0;
+
+    return (
+      <Card key={bank.id} interactive className={cn('border-transparent', tone.bg)}>
+        <CardBody className="flex h-full flex-col gap-3">
+          <div className="flex items-start justify-between gap-3">
+            <span className="inline-flex items-center gap-1.5 rounded-pill bg-white/70 px-2.5 py-1 text-micro font-medium text-ink-700 tabular-nums">
+              <Icon name="book" className="text-micro" />
+              {verified} question{verified === 1 ? '' : 's'}
+            </span>
+            <div className="flex items-center gap-1.5">
+              {bank.is_default && <Badge className="bg-white/70 text-ink-700">Built-in</Badge>}
+              {bank.counts.needs_review > 0 && (
+                <Badge tone="amber">{bank.counts.needs_review} to review</Badge>
+              )}
+              {/* Built-ins are shared, so they can't be deleted. */}
+              {!bank.is_default && (
+                <button
+                  onClick={() => {
+                    setDeleteError(null);
+                    setDeleting(bank);
+                  }}
+                  aria-label={`Delete ${bank.name}`}
+                  title="Delete bank"
+                  className="rounded-control p-1.5 text-ink-500 transition-colors hover:bg-white/70 hover:text-miss focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue"
+                >
+                  <Icon name="trash-can" className="text-small" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <Link
+              href={`/dashboard/practice/${bank.id}`}
+              className="rounded-sm text-h3 font-semibold text-ink-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue"
+            >
+              {bank.name}
+            </Link>
+            <p className="mt-0.5 text-micro text-ink-500">
+              Added {formatRelative(bank.created_at)}
+              {bank.attempted > 0 && ` · ${bank.attempted} of ${verified} worked`}
+            </p>
+          </div>
+
+          {bank.description && <p className="text-small text-ink-700">{bank.description}</p>}
+
+          <div className="mt-auto flex items-center justify-between gap-4 pt-2">
+            <div className="flex flex-1 items-center gap-2">
+              {/* Progress = how much of the bank you've worked through */}
+              <div className="h-1.5 flex-1 overflow-hidden rounded-pill bg-white/70">
+                <div className={cn('h-full rounded-pill', tone.fill)} style={{ width: `${pct}%` }} />
+              </div>
+              <span className="text-micro font-medium text-ink-700 tabular-nums">
+                {bank.attempted}/{verified}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Link
+                href={`/dashboard/practice/${bank.id}`}
+                className="rounded-control px-2 py-1 text-micro font-medium text-ink-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue"
+              >
+                View log
+              </Link>
+              <Button
+                size="sm"
+                disabled={verified === 0}
+                onClick={() => {
+                  setCount(Math.min(8, verified));
+                  setExcludeSeen(bank.attempted > 0 && bank.attempted < verified);
+                  setConfiguring({ kind: 'bank', bank });
+                }}
+              >
+                Start test
+                <Icon name="arrow-right" className="text-small" />
+              </Button>
+            </div>
+          </div>
+
+          {verified === 0 && (
+            <p className="text-micro text-ink-500">
+              Nothing verified yet — review the flagged questions to make them sittable.
+            </p>
+          )}
+        </CardBody>
+      </Card>
+    );
+  };
 
   return (
     <>
@@ -234,99 +360,24 @@ function PracticeInner() {
           ))}
         </div>
       ) : (
-        <Reveal stagger className="grid gap-4 md:grid-cols-2">
-          {list.map((bank, i) => {
-            const tone = CARD_TONES[i % CARD_TONES.length];
-            const verified = bank.counts.verified;
-            const pct = verified > 0 ? (bank.attempted / verified) * 100 : 0;
-
-            return (
-              <Card key={bank.id} interactive className={cn('border-transparent', tone.bg)}>
-                <CardBody className="flex h-full flex-col gap-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="inline-flex items-center gap-1.5 rounded-pill bg-white/70 px-2.5 py-1 text-micro font-medium text-ink-700 tabular-nums">
-                      <Icon name="book" className="text-micro" />
-                      {verified} question{verified === 1 ? '' : 's'}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      {bank.is_default && <Badge className="bg-white/70 text-ink-700">Built-in</Badge>}
-                      {bank.counts.needs_review > 0 && (
-                        <Badge tone="amber">{bank.counts.needs_review} to review</Badge>
-                      )}
-                      {/* Built-ins are shared, so they can't be deleted. */}
-                      {!bank.is_default && (
-                        <button
-                          onClick={() => {
-                            setDeleteError(null);
-                            setDeleting(bank);
-                          }}
-                          aria-label={`Delete ${bank.name}`}
-                          title="Delete bank"
-                          className="rounded-control p-1.5 text-ink-500 transition-colors hover:bg-white/70 hover:text-miss focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue"
-                        >
-                          <Icon name="trash-can" className="text-small" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <Link
-                      href={`/dashboard/practice/${bank.id}`}
-                      className="rounded-sm text-h3 font-semibold text-ink-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue"
-                    >
-                      {bank.name}
-                    </Link>
-                    <p className="mt-0.5 text-micro text-ink-500">
-                      Added {formatRelative(bank.created_at)}
-                      {bank.attempted > 0 && ` · ${bank.attempted} of ${verified} worked`}
-                    </p>
-                  </div>
-
-                  {bank.description && <p className="text-small text-ink-700">{bank.description}</p>}
-
-                  <div className="mt-auto flex items-center justify-between gap-4 pt-2">
-                    <div className="flex flex-1 items-center gap-2">
-                      {/* Progress = how much of the bank you've worked through */}
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-pill bg-white/70">
-                        <div className={cn('h-full rounded-pill', tone.fill)} style={{ width: `${pct}%` }} />
-                      </div>
-                      <span className="text-micro font-medium text-ink-700 tabular-nums">
-                        {bank.attempted}/{verified}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Link
-                        href={`/dashboard/practice/${bank.id}`}
-                        className="rounded-control px-2 py-1 text-micro font-medium text-ink-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue"
-                      >
-                        View log
-                      </Link>
-                      <Button
-                        size="sm"
-                        disabled={verified === 0}
-                        onClick={() => {
-                          setCount(Math.min(8, verified));
-                          setExcludeSeen(bank.attempted > 0 && bank.attempted < verified);
-                          setConfiguring({ kind: 'bank', bank });
-                        }}
-                      >
-                        Start test
-                        <Icon name="arrow-right" className="text-small" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  {verified === 0 && (
-                    <p className="text-micro text-ink-500">
-                      Nothing verified yet — review the flagged questions to make them sittable.
-                    </p>
-                  )}
-                </CardBody>
-              </Card>
-            );
-          })}
-        </Reveal>
+        <div className="space-y-8">
+          {bankGroups.map((group) => (
+            <section key={group.label}>
+              {/* Time-bucket eyebrow — a quiet divider, same language as the rest
+                  of the dashboard's small labels. */}
+              <div className="mb-3 flex items-center gap-3">
+                <h3 className="text-micro font-semibold uppercase tracking-[0.08em] text-ink-400">
+                  {group.label}
+                </h3>
+                <span className="text-micro text-ink-400 tabular-nums">{group.banks.length}</span>
+                <span className="h-px flex-1 bg-line" />
+              </div>
+              <Reveal stagger className="grid gap-4 md:grid-cols-2">
+                {group.banks.map((bank) => renderBankCard(bank, toneOf.get(bank.id)!))}
+              </Reveal>
+            </section>
+          ))}
+        </div>
       )}
 
       <UploadBankModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
