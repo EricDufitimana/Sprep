@@ -4,8 +4,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createTRPCRouter, protectedProcedure } from '../init';
 import { scoreAttempt, type ScorableAnswer, type ScorableQuestion } from '@/utils/scoring';
 import { fetchAllRows } from '@/utils/paginate';
+import { selectExamModule, type PoolItem } from '@/utils/sat-module';
 import { planFor, selectQuestionIds } from './modules-management';
 import { COMPLETED_ANSWER_FILTER } from './questions';
+import { questionDifficultySchema, sectionSchema } from '@/lib/validation';
 
 /**
  * Test lifecycle: start → (answers.save autosaves) → submit → getResults.
@@ -70,6 +72,8 @@ interface Selection {
   sourceName: string;
   bankId: string | null;
   moduleId: string | null;
+  /** Set only for ad-hoc sittings, which have no bank/module row to name them. */
+  title?: string | null;
 }
 
 /**
@@ -193,14 +197,83 @@ async function selectForModule(
   return { orderedIds, sourceName: mod.name, bankId: null, moduleId };
 }
 
+/** The criteria a "build an exam module" sitting draws from (no bank/module). */
+interface AdhocCriteria {
+  section: 'reading_writing' | 'math';
+  difficulty?: ('easy' | 'medium' | 'hard')[];
+  count: number;
+  cohort: 'all' | 'original' | 'new';
+  excludeActive: boolean;
+  excludeCompleted: boolean;
+}
+
+/** A human-readable name for an ad-hoc module, e.g. "Hard · Math exam module". */
+function adhocTitle(section: AdhocCriteria['section'], difficulty: string[] | undefined): string {
+  const sectionLabel = section === 'math' ? 'Math' : 'Reading & Writing';
+  const diffLabel =
+    difficulty && difficulty.length === 1
+      ? difficulty[0][0].toUpperCase() + difficulty[0].slice(1)
+      : 'Mixed';
+  return `${diffLabel} · ${sectionLabel} exam module`;
+}
+
+/**
+ * Pick questions for an ad-hoc "exam module" sitting: draw from the whole
+ * verified pool for a section (every bank the user can see, via RLS), filtered
+ * by difficulty / release cohort / disclosure, then balance and order it like a
+ * real Bluebook module (`selectExamModule`). This is the Question Bank's "build
+ * a module" flow — it saves no bank or module, just sits a fresh set.
+ */
+async function selectForAdhoc(supabase: SupabaseClient, adhoc: AdhocCriteria): Promise<Selection> {
+  // Paged: a section's verified pool exceeds PostgREST's 1000-row cap, and a
+  // truncated pool would bias both the balance and the random draw.
+  const pool = await fetchAllRows<PoolItem & { active: boolean | null }>((from, to) => {
+    let q = supabase
+      .from('questions')
+      .select('id, domain, difficulty, position, answer_format, active')
+      .eq('extraction_status', 'verified')
+      .eq('section', adhoc.section)
+      .order('id', { ascending: true });
+    if (adhoc.difficulty?.length) q = q.in('difficulty', adhoc.difficulty);
+    if (adhoc.cohort === 'original') q = q.is('release_batch', null);
+    else if (adhoc.cohort === 'new') q = q.not('release_batch', 'is', null);
+    return q.range(from, to);
+  });
+
+  // Keep only explicitly-disclosed official questions when asked (active === false;
+  // drop active === true live-in-Bluebook and active === null non-CB questions).
+  let items: PoolItem[] = adhoc.excludeActive ? pool.filter((r) => r.active === false) : pool;
+
+  if (adhoc.excludeCompleted) {
+    const seen = await completedQuestionIds(supabase);
+    items = items.filter((r) => !seen.has(r.id));
+  }
+
+  const mod = selectExamModule(items, adhoc.section, adhoc.count);
+  const title = adhocTitle(adhoc.section, adhoc.difficulty);
+  return { orderedIds: mod.orderedIds, sourceName: title, bankId: null, moduleId: null, title };
+}
+
 export const testsRouter = createTRPCRouter({
   start: protectedProcedure
     .input(
       z
         .object({
-          /** Exactly one of these. A bank sits one bank; a module spans several. */
+          /** Exactly one source. A bank sits one bank; a module spans several;
+           *  an ad-hoc "exam module" draws fresh from the whole verified pool. */
           bankId: z.string().uuid().optional(),
           moduleId: z.string().uuid().optional(),
+          adhoc: z
+            .object({
+              section: sectionSchema,
+              /** Omit / empty = any difficulty. The builder defaults this to hard. */
+              difficulty: z.array(questionDifficultySchema).optional(),
+              count: z.number().int().min(1).max(120),
+              cohort: z.enum(['all', 'original', 'new']).default('all'),
+              excludeActive: z.boolean().default(false),
+              excludeCompleted: z.boolean().default(false),
+            })
+            .optional(),
           /** False runs the sitting without a countdown; elapsed time is still recorded. */
           timed: z.boolean().default(true),
           timerSeconds: z.number().int().min(60).max(10800).optional(),
@@ -208,8 +281,8 @@ export const testsRouter = createTRPCRouter({
           questionCount: z.number().int().min(1).max(200).optional(),
           excludeSeen: z.boolean().default(false),
         })
-        .refine((v) => (v.bankId ? 1 : 0) + (v.moduleId ? 1 : 0) === 1, {
-          message: 'Start exactly one of a bank or a module',
+        .refine((v) => (v.bankId ? 1 : 0) + (v.moduleId ? 1 : 0) + (v.adhoc ? 1 : 0) === 1, {
+          message: 'Start exactly one of a bank, a module, or an ad-hoc module',
         })
         .refine((v) => !v.timed || typeof v.timerSeconds === 'number', {
           message: 'A timed sitting needs a duration',
@@ -219,17 +292,21 @@ export const testsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const { supabase, user } = ctx;
 
-      // Build the ordered id list + a display name, from either source.
-      const { orderedIds, sourceName, bankId, moduleId } = input.moduleId
-        ? await selectForModule(supabase, user.id, input.moduleId)
-        : await selectForBank(supabase, user.id, input.bankId!, input.excludeSeen, input.questionCount);
+      // Build the ordered id list + a display name, from whichever source.
+      const { orderedIds, sourceName, bankId, moduleId, title } = input.adhoc
+        ? await selectForAdhoc(supabase, input.adhoc)
+        : input.moduleId
+          ? await selectForModule(supabase, user.id, input.moduleId)
+          : await selectForBank(supabase, user.id, input.bankId!, input.excludeSeen, input.questionCount);
 
       if (orderedIds.length === 0) {
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
-          message: input.excludeSeen
-            ? 'You have already answered every question here. Turn off "skip questions I have done" to sit it again.'
-            : 'Nothing verified to sit here yet.',
+          message: input.adhoc
+            ? 'No questions match this module. Loosen the difficulty, switch cohort, or turn off exclusions.'
+            : input.excludeSeen
+              ? 'You have already answered every question here. Turn off "skip questions I have done" to sit it again.'
+              : 'Nothing verified to sit here yet.',
         });
       }
 
@@ -239,6 +316,7 @@ export const testsRouter = createTRPCRouter({
         .insert({
           bank_id: bankId,
           module_id: moduleId,
+          title: title ?? null,
           timer_seconds: input.timed ? input.timerSeconds : null,
           was_timed: input.timed,
           total_questions: orderedIds.length,
@@ -294,7 +372,7 @@ export const testsRouter = createTRPCRouter({
 
       const { data: attempt, error } = await supabase
         .from('test_attempts')
-        .select('id, user_id, bank_id, module_id, status, timer_seconds, was_timed, total_questions, started_at, question_banks ( name ), modules ( name )')
+        .select('id, user_id, bank_id, module_id, title, status, timer_seconds, was_timed, total_questions, started_at, question_banks ( name ), modules ( name )')
         .eq('id', input.attemptId)
         .single();
 
@@ -342,7 +420,7 @@ export const testsRouter = createTRPCRouter({
       return {
         attemptId: attempt.id,
         bankId: attempt.bank_id,
-        bankName: moduleName ?? bankName ?? 'Question set',
+        bankName: moduleName ?? bankName ?? attempt.title ?? 'Question set',
         timed: attempt.was_timed,
         timerSeconds: attempt.timer_seconds,
         startedAt: attempt.started_at,
@@ -505,6 +583,7 @@ export const testsRouter = createTRPCRouter({
         .select(`
           id,
           bank_id,
+          title,
           status,
           score_percent,
           correct_count,
@@ -562,6 +641,7 @@ export const testsRouter = createTRPCRouter({
         bankName:
           (a.modules as unknown as { name: string } | null)?.name ??
           (a.question_banks as unknown as { name: string } | null)?.name ??
+          a.title ??
           'Untitled test',
         isModule: (a.modules as unknown as { name: string } | null) !== null,
         status: a.status,

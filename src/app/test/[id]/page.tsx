@@ -773,7 +773,7 @@ function ReviewPanel({
               >
                 {i + 1}
                 {flagged && (
-                  <span aria-hidden className="absolute -right-1 -top-2 text-[11px]">
+                  <span aria-hidden className="absolute -right-1.5 -top-2.5 text-[15px] leading-none">
                     🔖
                   </span>
                 )}

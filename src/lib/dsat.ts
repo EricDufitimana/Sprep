@@ -21,6 +21,25 @@ export const DSAT_DOMAIN_WEIGHTS: Record<QuestionDomain, number> = {
 /** One R&W module. The default a "DSAT Standard" module offers. */
 export const DSAT_MODULE_QUESTIONS = 27;
 
+/**
+ * The order the four R&W domains actually appear in within a real Bluebook
+ * module — questions are grouped in domain blocks in this exact sequence, and
+ * within a block roughly easy→hard. This differs from `DOMAIN_ORDER` above,
+ * which is the browse-page display order, not the on-exam question order. Used
+ * to lay out a built exam module so it reads like the real thing.
+ *
+ *   1. Craft and Structure
+ *   2. Information and Ideas
+ *   3. Standard English Conventions
+ *   4. Expression of Ideas
+ */
+export const RW_MODULE_DOMAIN_ORDER: QuestionDomain[] = [
+  'craft_and_structure',
+  'information_and_ideas',
+  'standard_english_conventions',
+  'expression_of_ideas',
+];
+
 export const DOMAIN_ORDER: QuestionDomain[] = [
   'information_and_ideas',
   'craft_and_structure',

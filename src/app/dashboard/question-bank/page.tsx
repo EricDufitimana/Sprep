@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTRPC } from '@/trpc/client';
 import { PageHeader } from '@/components/page-header';
@@ -18,7 +19,7 @@ import { DesmosCalculator } from '@/components/desmos-calculator';
 import { SatReferenceSheet } from '@/components/sat-reference-sheet';
 import { cn } from '@/lib/utils';
 import { domainLabel } from '@/lib/labels';
-import { useSection } from '@/lib/section';
+import { useSection, SECTION_LABELS, type Section } from '@/lib/section';
 import { domainOrderFor } from '@/lib/dsat';
 
 /**
@@ -99,6 +100,7 @@ const COHORTS: { value: Cohort; label: string; hint: string }[] = [
 
 export default function QuestionBankPage() {
   const trpc = useTRPC();
+  const router = useRouter();
   const { section } = useSection();
   const DOMAIN_ORDER = domainOrderFor(section);
 
@@ -177,6 +179,7 @@ export default function QuestionBankPage() {
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
   const [customize, setCustomize] = useState<Scope | null>(null);
   const [session, setSession] = useState<{ questions: BuiltQuestion[]; label: string } | null>(null);
+  const [examOpen, setExamOpen] = useState(false);
 
   // Switching section resets the drill-down — an R&W domain is meaningless in math.
   useEffect(() => {
@@ -202,6 +205,15 @@ export default function QuestionBankPage() {
     return `${domainLabel(s.domain)} — ${s.skills.length} skill${s.skills.length === 1 ? '' : 's'}`;
   };
 
+  // How much of the pool sits at each difficulty — drives the exam-module card's
+  // "N hard available" line and the modal's live availability check.
+  const poolByDiff = { easy: 0, medium: 0, hard: 0, total: counts.data?.total ?? 0 };
+  for (const d of counts.data?.domains ?? []) {
+    poolByDiff.easy += d.byDifficulty.easy;
+    poolByDiff.medium += d.byDifficulty.medium;
+    poolByDiff.hard += d.byDifficulty.hard;
+  }
+
   return (
     <>
       {domain === null ? (
@@ -215,6 +227,13 @@ export default function QuestionBankPage() {
           <CohortSwitch value={cohort} onChange={setCohort} newCount={newCounts.data?.total ?? null} />
 
           <ExcludeActiveToggle value={excludeActive} onChange={setExcludeActive} />
+
+          <ExamModuleCard
+            section={section}
+            hardAvailable={poolByDiff.hard}
+            total={poolByDiff.total}
+            onBuild={() => setExamOpen(true)}
+          />
 
           {counts.isLoading ? (
             <div className="grid gap-4 sm:grid-cols-2">
@@ -426,6 +445,16 @@ export default function QuestionBankPage() {
           setSession({ questions, label });
           setCustomize(null);
         }}
+      />
+
+      <ExamModuleModal
+        open={examOpen}
+        section={section}
+        cohort={cohort}
+        excludeActive={excludeActive}
+        poolByDiff={poolByDiff}
+        onClose={() => setExamOpen(false)}
+        onStart={(attemptId) => router.push(`/test/${attemptId}`)}
       />
     </>
   );
@@ -777,6 +806,250 @@ function CustomizeModal({
           <p className="flex items-center gap-2 rounded-control bg-green-tint px-3 py-2.5 text-small text-green">
             <Icon name="checkmark-circle" className="shrink-0 text-body" />
             Active Bluebook questions are excluded from this set.
+          </p>
+        )}
+
+        {error && (
+          <p role="alert" className="rounded-control bg-miss-tint px-3 py-2 text-small text-miss">
+            {error}
+          </p>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/* ── Exam module: build a timed, SAT-faithful module from the pool ─────────── */
+
+/**
+ * The Question Bank's headline call-to-action: unlike the untimed drill sets
+ * below it, this builds a full, timed, Bluebook-style module straight from the
+ * verified pool — balanced to the official domain mix and ordered like the real
+ * exam. Defaults to hard, the point of the feature.
+ */
+function ExamModuleCard({
+  section,
+  hardAvailable,
+  total,
+  onBuild,
+}: {
+  section: Section;
+  hardAvailable: number;
+  total: number;
+  onBuild: () => void;
+}) {
+  return (
+    <Card className="mb-6 overflow-hidden border-blue/15 bg-blue-wash">
+      <CardBody className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue text-white shadow-sm">
+            <Icon name="grid-alt" className="text-body" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-h3 font-semibold text-ink-900">Build an exam module</h3>
+            <p className="mt-0.5 max-w-xl text-small text-ink-600">
+              A timed, Bluebook-style {SECTION_LABELS[section]} module drawn from the questions you
+              already have — balanced to the real SAT domain mix and ordered like the exam. Set to
+              hard by default.
+            </p>
+            <p className="mt-1 text-micro text-ink-500 tabular-nums">
+              {hardAvailable} hard question{hardAvailable === 1 ? '' : 's'} available in{' '}
+              {SECTION_LABELS[section]}
+            </p>
+          </div>
+        </div>
+        <Button onClick={onBuild} disabled={total === 0}>
+          Build module
+          <Icon name="arrow-right" className="text-small" />
+        </Button>
+      </CardBody>
+    </Card>
+  );
+}
+
+type ExamDifficulty = 'hard' | 'medium' | 'easy' | 'mixed';
+const EXAM_DIFFICULTIES: { value: ExamDifficulty; label: string }[] = [
+  { value: 'hard', label: 'Hard' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'easy', label: 'Easy' },
+  { value: 'mixed', label: 'Mixed' },
+];
+
+/**
+ * Configure and launch a timed exam module. Difficulty defaults to hard; the
+ * count (27) and timer (35 min) default to one standard sitting but are fully
+ * tweakable. On start it opens a real timed sitting in the Bluebook taker, so
+ * answering, flagging, and review all match a live section.
+ */
+function ExamModuleModal({
+  open,
+  section,
+  cohort,
+  excludeActive,
+  poolByDiff,
+  onClose,
+  onStart,
+}: {
+  open: boolean;
+  section: Section;
+  cohort: Cohort;
+  excludeActive: boolean;
+  poolByDiff: { easy: number; medium: number; hard: number; total: number };
+  onClose: () => void;
+  onStart: (attemptId: string) => void;
+}) {
+  const trpc = useTRPC();
+  const [difficulty, setDifficulty] = useState<ExamDifficulty>('hard');
+  const [count, setCount] = useState(27);
+  const [minutes, setMinutes] = useState(35);
+  const [excludeCompleted, setExcludeCompleted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const available = difficulty === 'mixed' ? poolByDiff.total : poolByDiff[difficulty];
+
+  const start = useMutation(
+    trpc.tests.start.mutationOptions({
+      onSuccess: (res) => onStart(res.attemptId),
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  const begin = () => {
+    setError(null);
+    start.mutate({
+      adhoc: {
+        section,
+        difficulty: difficulty === 'mixed' ? undefined : [difficulty],
+        count,
+        cohort,
+        excludeActive,
+        excludeCompleted,
+      },
+      timed: true,
+      timerSeconds: minutes * 60,
+    });
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Build an exam module"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={start.isPending}>
+            Cancel
+          </Button>
+          <Button onClick={begin} disabled={start.isPending || available === 0}>
+            {start.isPending ? 'Starting…' : `Start · ${minutes} min`}
+            <Icon name="arrow-right" className="text-small" />
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-5">
+        <p className="rounded-control bg-blue-wash px-3 py-2 text-small text-ink-600">
+          {SECTION_LABELS[section]} · balanced to the official SAT domain mix and ordered like a real
+          module. Runs under a countdown, Bluebook-style — no feedback until you submit.
+        </p>
+
+        {/* Difficulty — the whole point is hard, but tweakable. */}
+        <div>
+          <p className="mb-1.5 text-small font-medium text-ink-700">Difficulty</p>
+          <div className="grid grid-cols-4 gap-2">
+            {EXAM_DIFFICULTIES.map((d) => {
+              const on = difficulty === d.value;
+              const n = d.value === 'mixed' ? poolByDiff.total : poolByDiff[d.value];
+              return (
+                <button
+                  key={d.value}
+                  type="button"
+                  onClick={() => setDifficulty(d.value)}
+                  className={cn(
+                    'rounded-control border px-2 py-2 text-center transition-colors',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue',
+                    on ? 'border-blue bg-blue-tint' : 'border-line hover:border-ink-400/40',
+                  )}
+                >
+                  <span className="block text-small font-medium text-ink-900">{d.label}</span>
+                  <span className="block text-micro text-ink-500 tabular-nums">{n}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-4">
+          <Input
+            label="Questions"
+            type="number"
+            min={1}
+            max={Math.max(1, available)}
+            value={count}
+            onChange={(e) =>
+              setCount(Math.max(1, Math.min(120, Number(e.target.value) || 1)))
+            }
+            hint={`up to ${available} available`}
+            className="max-w-[9rem]"
+          />
+          <Input
+            label="Timer (minutes)"
+            type="number"
+            min={5}
+            max={180}
+            value={minutes}
+            onChange={(e) => setMinutes(Math.max(5, Math.min(180, Number(e.target.value) || 5)))}
+            hint="auto-submits at zero"
+            className="max-w-[9rem]"
+          />
+        </div>
+
+        <p className="text-micro text-ink-400">
+          A real Bluebook module is 27 questions in Reading &amp; Writing (32 min) and 22 in Math
+          (35 min). Tweak to match, or make your own.
+        </p>
+
+        <label className="flex cursor-pointer items-start gap-3 rounded-control border border-line px-3 py-2.5">
+          <input
+            type="checkbox"
+            checked={excludeCompleted}
+            onChange={(e) => setExcludeCompleted(e.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-blue"
+          />
+          <span>
+            <span className="block text-small font-medium text-ink-900">
+              Only questions I haven’t done
+            </span>
+            <span className="block text-micro text-ink-500">
+              Skips anything you’ve completed in a test or the bank.
+            </span>
+          </span>
+        </label>
+
+        {/* Confirm the page-wide scopes this module inherits. */}
+        {(cohort !== 'all' || excludeActive) && (
+          <div className="space-y-1.5">
+            {cohort !== 'all' && (
+              <p className="flex items-center gap-2 rounded-control bg-blue-tint px-3 py-2 text-small text-blue">
+                <Icon name="checkmark-circle" className="shrink-0 text-body" />
+                {cohort === 'new'
+                  ? 'Drawn only from the latest Bluebook release.'
+                  : 'Drawn only from the original question pool.'}
+              </p>
+            )}
+            {excludeActive && (
+              <p className="flex items-center gap-2 rounded-control bg-green-tint px-3 py-2 text-small text-green">
+                <Icon name="checkmark-circle" className="shrink-0 text-body" />
+                Active Bluebook questions are excluded.
+              </p>
+            )}
+          </div>
+        )}
+
+        {available === 0 && (
+          <p className="rounded-control bg-amber-tint px-3 py-2 text-small text-ink-700">
+            No {difficulty === 'mixed' ? '' : `${difficulty} `}questions available for this section
+            and cohort. Try another difficulty or switch cohort.
           </p>
         )}
 
