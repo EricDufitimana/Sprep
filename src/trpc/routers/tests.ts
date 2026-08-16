@@ -719,26 +719,35 @@ export const testsRouter = createTRPCRouter({
       const attemptIds = (data ?? [])
         .filter((a) => a.status === 'submitted')
         .map((a) => a.id);
-      const sectionsByAttempt = new Map<string, { domain: string; correct: number; total: number }[]>();
+      const sectionsByAttempt = new Map<
+        string,
+        { domain: string; correct: number; total: number; timeMs: number }[]
+      >();
+      const flaggedByAttempt = new Map<string, number>();
 
       if (attemptIds.length > 0) {
         const { data: rows } = await ctx.supabase
           .from('answers')
-          .select('attempt_id, is_correct, questions ( domain )')
+          .select('attempt_id, is_correct, flagged, time_spent_ms, questions ( domain )')
           .in('attempt_id', attemptIds);
 
         for (const row of rows ?? []) {
+          if (row.flagged) {
+            flaggedByAttempt.set(row.attempt_id, (flaggedByAttempt.get(row.attempt_id) ?? 0) + 1);
+          }
           // PostgREST embeds are typed as arrays by the untyped client even
           // when the FK makes them to-one; narrow through unknown.
           const domain = (row.questions as unknown as { domain: string | null } | null)?.domain;
           if (!domain) continue;
+          const timeMs = row.time_spent_ms ?? 0;
           const list = sectionsByAttempt.get(row.attempt_id) ?? [];
           const bucket = list.find((s) => s.domain === domain);
           if (bucket) {
             bucket.total += 1;
+            bucket.timeMs += timeMs;
             if (row.is_correct) bucket.correct += 1;
           } else {
-            list.push({ domain, correct: row.is_correct ? 1 : 0, total: 1 });
+            list.push({ domain, correct: row.is_correct ? 1 : 0, total: 1, timeMs });
           }
           sectionsByAttempt.set(row.attempt_id, list);
         }
@@ -762,8 +771,80 @@ export const testsRouter = createTRPCRouter({
         timed: a.was_timed,
         startedAt: a.started_at,
         submittedAt: a.submitted_at,
+        flaggedCount: flaggedByAttempt.get(a.id) ?? 0,
         sections: (sectionsByAttempt.get(a.id) ?? []).sort((x, y) => x.domain.localeCompare(y.domain)),
       }));
+    }),
+
+  /**
+   * Delete a sitting outright — used to abandon a paused/in-progress attempt the
+   * user no longer wants to continue. Cascades to its frozen questions and
+   * answers (both FK'd with on delete cascade). RLS also scopes the delete.
+   */
+  deleteAttempt: protectedProcedure
+    .input(z.object({ attemptId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { supabase, user } = ctx;
+      const { data: attempt, error } = await supabase
+        .from('test_attempts')
+        .select('id, user_id')
+        .eq('id', input.attemptId)
+        .single();
+      if (error || !attempt) throw new TRPCError({ code: 'NOT_FOUND', message: 'Attempt not found' });
+      if (attempt.user_id !== user.id) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'That attempt is not yours' });
+      }
+      const { error: delError } = await supabase
+        .from('test_attempts')
+        .delete()
+        .eq('id', input.attemptId);
+      if (delError) {
+        console.error('❌ [tests.deleteAttempt] delete failed:', delError);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not delete the sitting' });
+      }
+      return { success: true };
+    }),
+
+  /**
+   * The questions a user got wrong in a submitted sitting, as SAFE columns (no
+   * answers/explanations) — the seed for an untimed "redo your misses" run, which
+   * reveals answers one at a time via `questions.reveal`, exactly like the
+   * question-bank taker. Only the owner of a submitted attempt can read them.
+   */
+  failedQuestions: protectedProcedure
+    .input(z.object({ attemptId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const { supabase, user } = ctx;
+
+      const { data: attempt, error: aError } = await supabase
+        .from('test_attempts')
+        .select('id, user_id, status')
+        .eq('id', input.attemptId)
+        .single();
+      if (aError || !attempt) throw new TRPCError({ code: 'NOT_FOUND', message: 'Attempt not found' });
+      if (attempt.user_id !== user.id) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'That attempt is not yours' });
+      }
+
+      const { data: rows, error } = await supabase
+        .from('answers')
+        .select(
+          `question_id, is_correct, questions!inner ( ${SAFE_QUESTION_COLUMNS} )`,
+        )
+        .eq('attempt_id', input.attemptId)
+        .eq('is_correct', false);
+
+      if (error) {
+        console.error('❌ [tests.failedQuestions] query failed:', error);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not load your misses' });
+      }
+
+      const questions = (rows ?? [])
+        .map((r) => r.questions as unknown as SafeQuestion)
+        .filter((q): q is SafeQuestion => q != null)
+        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+
+      return { questions };
     }),
 });
 

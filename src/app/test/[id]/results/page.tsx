@@ -12,6 +12,7 @@ import { Card, CardBody } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { QuestionMeta, QuestionReview } from '@/components/question-review';
+import { UntimedTaker, type BuiltQuestion } from '@/components/untimed-taker';
 import { accuracyTone, domainLabel, formatDuration } from '@/lib/labels';
 import { cn } from '@/lib/utils';
 import { DIAGNOSIS_REASONS, type DiagnosisKey } from '@/lib/diagnosis';
@@ -22,6 +23,30 @@ export default function ResultsPage() {
   const trpc = useTRPC();
 
   const results = useQuery(trpc.tests.getResults.queryOptions({ attemptId }));
+
+  // "Redo your misses" — an untimed second pass over just the wrong ones.
+  const [redoing, setRedoing] = useState(false);
+  const failed = useQuery({
+    ...trpc.tests.failedQuestions.queryOptions({ attemptId }),
+    enabled: redoing,
+  });
+
+  if (redoing) {
+    const qs = failed.data?.questions ?? [];
+    if (failed.isLoading) {
+      return <p className="py-12 text-center text-body text-ink-500">Gathering the ones you missed…</p>;
+    }
+    if (qs.length > 0) {
+      return (
+        <UntimedTaker
+          questions={qs as unknown as BuiltQuestion[]}
+          scopeLabel="Redo — questions you missed"
+          onExit={() => setRedoing(false)}
+        />
+      );
+    }
+    // Nothing to redo (or the load failed) — fall through to the results below.
+  }
 
   if (results.isLoading) {
     return <p className="py-12 text-center text-body text-ink-500">Loading your results…</p>;
@@ -37,6 +62,7 @@ export default function ResultsPage() {
   }
 
   const r = results.data;
+  const missed = r.totalQuestions - r.correctCount;
 
   return (
     <>
@@ -66,37 +92,52 @@ export default function ResultsPage() {
               </p>
             </div>
 
-            <div className="min-w-56 flex-1 space-y-3">
-              {r.byDomain.length === 0 ? (
-                <p className="text-small text-ink-400">No domain breakdown for this sitting.</p>
-              ) : (
-                r.byDomain.map((s) => (
-                  <div key={s.key}>
-                    <div className="mb-1 flex items-baseline justify-between gap-4">
-                      <span className="text-small text-ink-700">{domainLabel(s.key)}</span>
-                      <span className="text-small font-medium text-ink-900 tabular-nums">
-                        {s.correct}/{s.total}
-                      </span>
-                    </div>
-                    <ProgressBar
-                      value={s.accuracyPercent}
-                      tone={accuracyTone(s.accuracyPercent)}
-                      label={`${domainLabel(s.key)} score`}
-                    />
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Badge tone="blue">{r.answeredCount} answered</Badge>
+            <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+              <Badge tone="blue">{r.correctCount}/{r.totalQuestions} correct</Badge>
               <Badge tone="neutral">{r.unansweredCount} blank</Badge>
               <Badge tone="amber">{r.flaggedCount} flagged</Badge>
-              <Badge tone="miss">{r.totalQuestions - r.correctCount} missed</Badge>
+              <Badge tone="miss">{missed} missed</Badge>
             </div>
           </CardBody>
         </Card>
       </Reveal>
+
+      {/* Analysis — accuracy split by domain and by skill, side by side. */}
+      {(r.byDomain.length > 0 || r.bySkill.length > 0) && (
+        <Reveal className="mt-4 grid gap-4 md:grid-cols-2">
+          <Card>
+            <CardBody>
+              <Breakdown title="By domain" rows={r.byDomain} label={(k) => domainLabel(k)} />
+            </CardBody>
+          </Card>
+          <Card>
+            <CardBody>
+              <Breakdown title="By skill" rows={r.bySkill} label={(k) => k} />
+            </CardBody>
+          </Card>
+        </Reveal>
+      )}
+
+      {/* Redo the misses, untimed — a second attempt to see if it sticks. */}
+      {missed > 0 && (
+        <Reveal>
+          <Card className="mt-4 border-blue/20 bg-blue-wash">
+            <CardBody className="flex flex-wrap items-center justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="text-h3 font-semibold text-ink-900">Redo your misses</h3>
+                <p className="mt-0.5 max-w-xl text-small text-ink-500">
+                  Work the {missed} question{missed === 1 ? '' : 's'} you got wrong again — untimed,
+                  with the answer and explanation after each. See if it sticks the second time.
+                </p>
+              </div>
+              <Button onClick={() => setRedoing(true)} disabled={failed.isFetching}>
+                <Icon name="reload" className="text-small" />
+                {failed.isFetching ? 'Loading…' : `Redo ${missed} untimed`}
+              </Button>
+            </CardBody>
+          </Card>
+        </Reveal>
+      )}
 
       <h2 className="mb-3 mt-8 text-h2 font-semibold text-ink-900">Question review</h2>
 
@@ -142,6 +183,48 @@ export default function ResultsPage() {
         ))}
       </Reveal>
     </>
+  );
+}
+
+/**
+ * Accuracy split for one facet (domain or skill) as labelled progress bars,
+ * hardest-first so the weakest areas sit at the top where they're seen.
+ */
+function Breakdown({
+  title,
+  rows,
+  label,
+}: {
+  title: string;
+  rows: { key: string; correct: number; total: number; accuracyPercent: number }[];
+  label: (key: string) => string;
+}) {
+  const sorted = [...rows].sort((a, b) => a.accuracyPercent - b.accuracyPercent);
+  return (
+    <div>
+      <p className="mb-3 text-micro font-medium uppercase tracking-wide text-ink-400">{title}</p>
+      {sorted.length === 0 ? (
+        <p className="text-small text-ink-400">No breakdown for this sitting.</p>
+      ) : (
+        <div className="space-y-2.5">
+          {sorted.map((s) => (
+            <div key={s.key}>
+              <div className="mb-1 flex items-baseline justify-between gap-4">
+                <span className="truncate text-small text-ink-700">{label(s.key)}</span>
+                <span className="shrink-0 text-small font-medium text-ink-900 tabular-nums">
+                  {s.correct}/{s.total}
+                </span>
+              </div>
+              <ProgressBar
+                value={s.accuracyPercent}
+                tone={accuracyTone(s.accuracyPercent)}
+                label={`${label(s.key)} score`}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
