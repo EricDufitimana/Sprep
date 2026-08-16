@@ -58,6 +58,9 @@ const MODE_TABS = [
   { value: 'untimed' as const, label: 'Untimed' },
 ];
 
+/** m:ss from a whole number of seconds. */
+const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
 /**
  * Sort banks newest-first and split them into rolling time buckets, so a long
  * list reads as "what I added recently" rather than one flat wall. Empty
@@ -93,6 +96,7 @@ function PracticeInner() {
 
   const banks = useQuery(trpc.questionBanksManagement.list.queryOptions());
   const modules = useQuery(trpc.modulesManagement.list.queryOptions());
+  const attempts = useQuery(trpc.tests.listAttempts.queryOptions({ limit: 20 }));
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [builderOpen, setBuilderOpen] = useState(false);
@@ -158,6 +162,9 @@ function PracticeInner() {
 
   const list = (banks.data ?? []) as Bank[];
   const moduleList = (modules.data ?? []) as ModuleRow[];
+  // Sittings still open — paused, or in progress — surfaced up top so a person
+  // can pick up exactly where they left off.
+  const resumable = (attempts.data ?? []).filter((a) => a.status !== 'submitted');
   const configBank = configuring?.kind === 'bank' ? configuring.bank : null;
   const pool = configBank
     ? excludeSeen
@@ -286,6 +293,50 @@ function PracticeInner() {
         </Link>
         .
       </p>
+
+      {/* Resume — open sittings (paused or in progress), pick up where you left off. */}
+      {resumable.length > 0 && (
+        <div className="mb-8">
+          <h2 className="mb-3 text-h3 font-semibold text-ink-900">Continue where you left off</h2>
+          <Reveal stagger className="grid gap-4 md:grid-cols-2">
+            {resumable.map((a) => {
+              const isPaused = a.status === 'paused';
+              const left =
+                a.timed && a.timerSeconds != null
+                  ? Math.max(0, a.timerSeconds - (a.timeUsedSeconds ?? 0))
+                  : null;
+              return (
+                <Card key={a.id} interactive className="border-blue/25 bg-blue-wash">
+                  <CardBody className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Badge tone={isPaused ? 'neutral' : 'blue'}>
+                          {isPaused ? 'Paused' : 'In progress'}
+                        </Badge>
+                        {isPaused && left != null && (
+                          <span className="inline-flex items-center gap-1 text-micro text-ink-500 tabular-nums">
+                            <Icon name="timer" className="text-micro" />
+                            {mmss(left)} left
+                          </span>
+                        )}
+                      </div>
+                      <h3 className="mt-1.5 truncate text-h3 font-semibold text-ink-900">{a.bankName}</h3>
+                      <p className="mt-0.5 text-micro text-ink-500">
+                        {a.totalQuestions ?? '—'} question{a.totalQuestions === 1 ? '' : 's'} · started{' '}
+                        {formatRelative(a.startedAt)}
+                      </p>
+                    </div>
+                    <Button size="sm" className="shrink-0" onClick={() => router.push(`/test/${a.id}`)}>
+                      Resume
+                      <Icon name="arrow-right" className="text-small" />
+                    </Button>
+                  </CardBody>
+                </Card>
+              );
+            })}
+          </Reveal>
+        </div>
+      )}
 
       {/* Modules — composed sections. Shown above banks when any exist. */}
       {moduleList.length > 0 && (

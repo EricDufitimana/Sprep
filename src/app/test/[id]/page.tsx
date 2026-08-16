@@ -140,6 +140,24 @@ export default function TestPage() {
     }),
   );
 
+  // Pause: freeze the countdown and leave. Answers are already autosaved, so this
+  // only stops the clock server-side, then returns to Practice to resume later.
+  const pause = useMutation(
+    trpc.tests.pause.mutationOptions({
+      onSuccess: () => router.push('/dashboard/practice'),
+      onError: (e) => setError(e.message),
+    }),
+  );
+
+  // Resume: restart the countdown from the remaining time, then refetch so the
+  // taker unfreezes with a fresh deadline.
+  const resume = useMutation(
+    trpc.tests.resume.mutationOptions({
+      onSuccess: () => queryClient.invalidateQueries(trpc.tests.getAttempt.queryFilter()),
+      onError: (e) => setError(e.message),
+    }),
+  );
+
   const doSubmit = useCallback(() => {
     if (submitted) return;
     setError(null);
@@ -157,14 +175,19 @@ export default function TestPage() {
   const timerSeconds = attempt.data?.timerSeconds ?? null;
   const isTimed = Boolean(attempt.data?.timed && timerSeconds);
 
-  // The deadline is anchored to the server's `started_at`, not to when this
-  // component mounted, so a refresh mid-sitting resumes the *same* countdown
-  // instead of restarting it, and each tick is derived from the wall clock so a
-  // backgrounded/throttled tab can't make the timer drift.
+  // Pause/resume timing. `resumedAt` anchors the current running segment and
+  // `timeUsedSeconds` is the active time already banked in earlier segments, so
+  // the deadline is the *remaining* time counted from when the sitting last
+  // resumed — a pause genuinely stops the clock, and a refresh resumes the same
+  // countdown. Each tick derives from the wall clock, so a throttled tab can't
+  // drift. Legacy attempts fall back to started_at with 0 used.
+  const paused = attempt.data?.status === 'paused';
+  const timeUsedSeconds = attempt.data?.timeUsedSeconds ?? 0;
+  const resumedAt = attempt.data?.resumedAt ?? attempt.data?.startedAt ?? null;
   const deadline = useMemo(() => {
-    if (!isTimed || timerSeconds === null || !attempt.data?.startedAt) return null;
-    return new Date(attempt.data.startedAt).getTime() + timerSeconds * 1000;
-  }, [isTimed, timerSeconds, attempt.data?.startedAt]);
+    if (!isTimed || timerSeconds === null || !resumedAt) return null;
+    return new Date(resumedAt).getTime() + Math.max(0, timerSeconds - timeUsedSeconds) * 1000;
+  }, [isTimed, timerSeconds, resumedAt, timeUsedSeconds]);
 
   // Auto-submit must fire from inside the interval, but `doSubmit`'s identity
   // changes every render (it closes over the submit mutation). Holding it in a
@@ -183,7 +206,9 @@ export default function TestPage() {
   }, [submitted, timeExpired]);
 
   useEffect(() => {
-    if (deadline === null) return;
+    // A paused sitting must not tick — its frozen deadline may already be in the
+    // past, which would otherwise auto-submit the moment it loads.
+    if (deadline === null || paused) return;
     let fired = false;
     const tick = () => {
       const secsLeft = Math.max(0, Math.round((deadline - Date.now()) / 1000));
@@ -200,7 +225,7 @@ export default function TestPage() {
     tick(); // paint the correct value immediately, no one-second flash
     const id = setInterval(tick, 500);
     return () => clearInterval(id);
-  }, [deadline]);
+  }, [deadline, paused]);
 
   // Keyboard eliminator: ⌘⌥1..4 (Ctrl+Alt on non-Mac) crosses out choice A..D,
   // pressing the same combo again restores it — a fast way to narrow answers.
@@ -326,7 +351,7 @@ export default function TestPage() {
             onClick={() => setExiting(true)}
             className="mt-0.5 flex items-center gap-1.5 rounded border border-[#5B6178] px-2 py-0.5 text-[12px] font-semibold hover:bg-white/60"
           >
-            <span aria-hidden>←</span> Save &amp; Exit
+            <span aria-hidden>⏸</span> Pause &amp; Exit
           </button>
         </div>
 
@@ -577,24 +602,27 @@ export default function TestPage() {
         >
           <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
             <h2 id="exit-title" className="dsat-text dsat-bold">
-              Leave this test?
+              Pause this test?
             </h2>
             <p className="dsat-text mt-2">
-              Your answers are saved as you go, so you can pick this sitting up again from
-              Practice. Nothing is submitted or scored until you press Submit.
+              {isTimed
+                ? 'Your answers are saved and the timer stops here. Pick this sitting up again from Practice with the same time remaining — nothing is submitted or scored until you press Submit.'
+                : 'Your answers are saved, so you can pick this sitting up again from Practice. Nothing is submitted or scored until you press Submit.'}
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button
                 onClick={() => setExiting(false)}
-                className="rounded-full border border-[#1D2A5B] px-5 py-1.5 text-[13px] font-semibold text-[#1D2A5B]"
+                disabled={pause.isPending}
+                className="rounded-full border border-[#1D2A5B] px-5 py-1.5 text-[13px] font-semibold text-[#1D2A5B] disabled:opacity-40"
               >
                 Keep working
               </button>
               <button
-                onClick={() => router.push('/dashboard/practice')}
-                className="rounded-full bg-[#1D2A5B] px-5 py-1.5 text-[13px] font-semibold text-white"
+                onClick={() => pause.mutate({ attemptId })}
+                disabled={pause.isPending}
+                className="rounded-full bg-[#1D2A5B] px-5 py-1.5 text-[13px] font-semibold text-white disabled:opacity-40"
               >
-                Save &amp; exit
+                {pause.isPending ? 'Pausing…' : 'Pause & exit'}
               </button>
             </div>
           </div>
@@ -648,6 +676,75 @@ export default function TestPage() {
 
       {/* SAT math reference sheet — opened from the header's "Reference". */}
       <SatReferenceSheet open={refOpen} onClose={() => setRefOpen(false)} />
+
+      {/* ── Paused overlay ────────────────────────────────────────────
+          Shown whenever the sitting loads paused (from Practice, or straight
+          after Pause & Exit). The countdown is frozen behind it and only
+          restarts once "Resume" flips the status back to in_progress. */}
+      {paused && !submitted && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-[#E7EAF4] px-6 text-center"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="paused-title"
+        >
+          <div className="w-full max-w-sm rounded-2xl bg-white px-7 py-8 shadow-xl">
+            <div
+              className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full text-[22px]"
+              style={{ backgroundColor: '#DCE1F1', color: BB.navy }}
+              aria-hidden
+            >
+              ⏸
+            </div>
+            <h2 id="paused-title" className="dsat-text dsat-bold text-[19px]">
+              Paused
+            </h2>
+            <p className="dsat-text mt-2 text-[#41454E]">
+              You’ve answered {answeredCount} of {questions.length} question
+              {questions.length === 1 ? '' : 's'}. Your work is saved.
+            </p>
+
+            <div className="my-5 flex items-center justify-center gap-6 border-y py-3" style={{ borderColor: BB.rule }}>
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-[#5B6178]">Answered</p>
+                <p className="text-[18px] font-semibold tabular-nums">
+                  {answeredCount}/{questions.length}
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-[#5B6178]">Time left</p>
+                <p className="text-[18px] font-semibold tabular-nums">
+                  {isTimed
+                    ? mmss(Math.max(0, (timerSeconds ?? 0) - timeUsedSeconds))
+                    : 'Untimed'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-center gap-2">
+              <button
+                onClick={() => router.push('/dashboard/practice')}
+                disabled={resume.isPending}
+                className="rounded-full border border-[#1D2A5B] px-5 py-2 text-[13px] font-semibold text-[#1D2A5B] disabled:opacity-40"
+              >
+                Later
+              </button>
+              <button
+                onClick={() => resume.mutate({ attemptId })}
+                disabled={resume.isPending}
+                className="rounded-full bg-[#1D2A5B] px-6 py-2 text-[13px] font-semibold text-white disabled:opacity-40"
+              >
+                {resume.isPending ? 'Resuming…' : 'Resume'}
+              </button>
+            </div>
+            {error && (
+              <p role="alert" className="mt-3 text-[12px] text-[#C0392B]">
+                {error}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Freeze + auto-submit overlay ──────────────────────────────
           Covers the whole screen the instant time runs out (or on manual

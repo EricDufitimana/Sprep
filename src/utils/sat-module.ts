@@ -34,6 +34,7 @@ import {
 export interface PoolItem {
   id: string;
   domain: string | null;
+  skill: string | null;
   difficulty: string | null;
   position: number | null;
   answer_format?: string | null;
@@ -53,6 +54,53 @@ export interface ExamModule {
 const DIFF_RANK: Record<string, number> = { easy: 0, medium: 1, hard: 2 };
 /** Unknown difficulty sorts as medium so it lands in the middle, not the ends. */
 const diffRank = (d: string | null): number => (d && d in DIFF_RANK ? DIFF_RANK[d] : 1);
+
+/**
+ * Rank a Reading & Writing skill within its domain, in the order a real Bluebook
+ * module walks them. Matched on normalized keywords, not exact strings, because
+ * the bank holds many spellings of the same skill ("Central Ideas & Details",
+ * "Text Structure and Purpose", "Form, Structure & Sense (…)", "Inference"). Any
+ * skill that doesn't match sorts after the known ones, keeping the block intact.
+ *
+ *   Craft & Structure:   Words in Context → Text Structure & Purpose → Cross-Text
+ *   Information & Ideas:  Central Ideas → Command of Evidence (Textual →
+ *                         Quantitative) → Inferences
+ *   Std. English Conv.:   Boundaries → Form, Structure & Sense
+ *   Expression of Ideas:  Transitions → Rhetorical Synthesis
+ */
+export function rwSkillRank(domain: string | null, skill: string | null): number {
+  const s = (skill ?? '')
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const has = (kw: string) => s.includes(kw);
+
+  switch (domain) {
+    case 'craft_and_structure':
+      if (has('words in context')) return 0;
+      if (has('text structure')) return 1;
+      if (has('cross')) return 2;
+      return 3;
+    case 'information_and_ideas':
+      if (has('central idea')) return 0;
+      if (has('command of evidence') && has('quantitative')) return 2;
+      if (has('command of evidence') || has('textual evidence')) return 1;
+      if (has('inference')) return 3;
+      return 4;
+    case 'standard_english_conventions':
+      if (has('boundaries')) return 0;
+      if (has('form') && has('structure')) return 1;
+      return 2;
+    case 'expression_of_ideas':
+      if (has('transition')) return 0;
+      if (has('rhetorical')) return 1;
+      return 2;
+    default:
+      return 99;
+  }
+}
 /** Grid-ins trail multiple-choice within a difficulty tier, as on the real exam. */
 const formatRank = (f: string | null | undefined): number => (f === 'spr' ? 1 : 0);
 const posRank = (p: number | null): number => (p ?? Number.POSITIVE_INFINITY);
@@ -85,14 +133,24 @@ export function orderLikeExam(items: PoolItem[], section: Section): PoolItem[] {
         posRank(a.position) - posRank(b.position),
     );
   }
-  // Reading & Writing: domain blocks in module sequence, easy→hard within.
+  // Reading & Writing: fixed domain blocks (Reading domains first, then Writing).
+  // Within a domain the real module groups by skill sub-type then runs
+  // easiest→hardest — except Standard English Conventions, which College Board
+  // sorts by difficulty only, with the grammar sub-types mixed together.
   const domainRank = indexRanker(RW_MODULE_DOMAIN_ORDER);
-  return [...items].sort(
-    (a, b) =>
-      domainRank(a.domain) - domainRank(b.domain) ||
+  return [...items].sort((a, b) => {
+    const byDomain = domainRank(a.domain) - domainRank(b.domain);
+    if (byDomain !== 0) return byDomain;
+    // Same domain from here on.
+    if (a.domain === 'standard_english_conventions') {
+      return diffRank(a.difficulty) - diffRank(b.difficulty) || posRank(a.position) - posRank(b.position);
+    }
+    return (
+      rwSkillRank(a.domain, a.skill) - rwSkillRank(b.domain, b.skill) ||
       diffRank(a.difficulty) - diffRank(b.difficulty) ||
-      posRank(a.position) - posRank(b.position),
-  );
+      posRank(a.position) - posRank(b.position)
+    );
+  });
 }
 
 /**

@@ -1,17 +1,18 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { orderLikeExam, selectExamModule, type PoolItem } from '../sat-module.ts';
+import { orderLikeExam, rwSkillRank, selectExamModule, type PoolItem } from '../sat-module.ts';
 
 /** Build a pool of `n` items in one domain/difficulty, ids prefixed for clarity. */
 function make(
   domain: string,
   difficulty: string,
   n: number,
-  opts: { format?: string; startPos?: number } = {},
+  opts: { format?: string; startPos?: number; skill?: string } = {},
 ): PoolItem[] {
   return Array.from({ length: n }, (_, i) => ({
     id: `${domain}-${difficulty}-${i}`,
     domain,
+    skill: opts.skill ?? null,
     difficulty,
     position: (opts.startPos ?? 0) + i,
     answer_format: opts.format ?? 'mcq',
@@ -57,6 +58,50 @@ describe('selectExamModule — Reading & Writing', () => {
     const mod = selectExamModule(pool, 'reading_writing', 27);
     assert.equal(mod.total, 3);
     assert.ok(mod.notes.length > 0);
+  });
+
+  it('orders skills within a domain the way a real module does', () => {
+    // Deliberately shuffled input, with the bank's real spelling variants.
+    const pool = [
+      ...make('craft_and_structure', 'medium', 1, { skill: 'Cross-Text Connections' }),
+      ...make('craft_and_structure', 'medium', 1, { skill: 'Text Structure & Purpose' }),
+      ...make('craft_and_structure', 'medium', 1, { skill: 'Words in Context' }),
+    ];
+    const ordered = orderLikeExam(pool, 'reading_writing').map((q) => q.skill);
+    assert.deepEqual(ordered, [
+      'Words in Context',
+      'Text Structure & Purpose',
+      'Cross-Text Connections',
+    ]);
+  });
+
+  it('sequences Information & Ideas: central → evidence(textual→quant) → inferences', () => {
+    const pool = [
+      ...make('information_and_ideas', 'medium', 1, { skill: 'Inferences' }),
+      ...make('information_and_ideas', 'medium', 1, { skill: 'Command of Evidence (Quantitative)' }),
+      ...make('information_and_ideas', 'medium', 1, { skill: 'Command of Evidence (Textual)' }),
+      ...make('information_and_ideas', 'medium', 1, { skill: 'Central Ideas & Details' }),
+    ];
+    const ordered = orderLikeExam(pool, 'reading_writing').map((q) => q.skill);
+    assert.deepEqual(ordered, [
+      'Central Ideas & Details',
+      'Command of Evidence (Textual)',
+      'Command of Evidence (Quantitative)',
+      'Inferences',
+    ]);
+  });
+});
+
+describe('rwSkillRank', () => {
+  it('is stable across spelling variants of the same skill', () => {
+    assert.equal(
+      rwSkillRank('standard_english_conventions', 'Form, Structure & Sense'),
+      rwSkillRank('standard_english_conventions', 'Form, Structure, and Sense (Dangling Modifiers)'),
+    );
+    assert.ok(
+      rwSkillRank('standard_english_conventions', 'Boundaries') <
+        rwSkillRank('standard_english_conventions', 'Form, Structure & Sense'),
+    );
   });
 });
 

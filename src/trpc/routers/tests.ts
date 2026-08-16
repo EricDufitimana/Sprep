@@ -230,7 +230,7 @@ async function selectForAdhoc(supabase: SupabaseClient, adhoc: AdhocCriteria): P
   const pool = await fetchAllRows<PoolItem & { active: boolean | null }>((from, to) => {
     let q = supabase
       .from('questions')
-      .select('id, domain, difficulty, position, answer_format, active')
+      .select('id, domain, skill, difficulty, position, answer_format, active')
       .eq('extraction_status', 'verified')
       .eq('section', adhoc.section)
       .order('id', { ascending: true });
@@ -372,7 +372,7 @@ export const testsRouter = createTRPCRouter({
 
       const { data: attempt, error } = await supabase
         .from('test_attempts')
-        .select('id, user_id, bank_id, module_id, title, status, timer_seconds, was_timed, total_questions, started_at, question_banks ( name ), modules ( name )')
+        .select('id, user_id, bank_id, module_id, title, status, timer_seconds, was_timed, total_questions, started_at, resumed_at, time_used_seconds, question_banks ( name ), modules ( name )')
         .eq('id', input.attemptId)
         .single();
 
@@ -382,7 +382,8 @@ export const testsRouter = createTRPCRouter({
       if (attempt.user_id !== user.id) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'That attempt is not yours' });
       }
-      if (attempt.status !== 'in_progress') {
+      // A paused sitting is resumable, so it loads too; only a submitted one is done.
+      if (attempt.status !== 'in_progress' && attempt.status !== 'paused') {
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
           message: 'This test has already been submitted',
@@ -424,7 +425,102 @@ export const testsRouter = createTRPCRouter({
         timed: attempt.was_timed,
         timerSeconds: attempt.timer_seconds,
         startedAt: attempt.started_at,
+        // Pause/resume timing. `resumedAt` anchors the current running segment
+        // (falls back to started_at for legacy attempts); `timeUsedSeconds` is
+        // the active time already spent in earlier segments. Remaining time is
+        // (timerSeconds − timeUsedSeconds) counted down from resumedAt.
+        status: attempt.status as 'in_progress' | 'paused',
+        resumedAt: attempt.resumed_at ?? attempt.started_at,
+        timeUsedSeconds: attempt.time_used_seconds ?? 0,
         questions,
+      };
+    }),
+
+  /**
+   * Pause an in-progress sitting: fold the active time since `resumed_at` into
+   * `time_used_seconds` and mark it 'paused', which freezes the countdown. The
+   * answers themselves are already autosaved by `answers.save`, so this only
+   * needs to stop the clock. Idempotent — pausing an already-paused sitting is a
+   * no-op. Timed sittings cap the accumulator at the timer so a long-open tab
+   * can't bank negative time.
+   */
+  pause: protectedProcedure
+    .input(z.object({ attemptId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { supabase, user } = ctx;
+
+      const { data: attempt, error } = await supabase
+        .from('test_attempts')
+        .select('id, user_id, status, started_at, resumed_at, time_used_seconds, timer_seconds, was_timed')
+        .eq('id', input.attemptId)
+        .single();
+
+      if (error || !attempt) throw new TRPCError({ code: 'NOT_FOUND', message: 'Attempt not found' });
+      if (attempt.user_id !== user.id) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'That attempt is not yours' });
+      }
+      if (attempt.status === 'submitted') {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'This test is already submitted' });
+      }
+      if (attempt.status === 'paused') return { success: true, alreadyPaused: true };
+
+      const anchor = new Date(attempt.resumed_at ?? attempt.started_at).getTime();
+      const segment = Math.max(0, Math.round((Date.now() - anchor) / 1000));
+      let used = (attempt.time_used_seconds ?? 0) + segment;
+      if (attempt.was_timed && attempt.timer_seconds) used = Math.min(used, attempt.timer_seconds);
+
+      const { error: updateError } = await supabase
+        .from('test_attempts')
+        .update({ status: 'paused', time_used_seconds: used })
+        .eq('id', input.attemptId);
+
+      if (updateError) {
+        console.error('❌ [tests.pause] Failed to pause:', updateError);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not pause the test' });
+      }
+      return { success: true, alreadyPaused: false };
+    }),
+
+  /**
+   * Resume a paused sitting: stamp `resumed_at` to now and flip back to
+   * 'in_progress', so the countdown restarts from the remaining time
+   * (timer_seconds − time_used_seconds). No-op if it's already running.
+   */
+  resume: protectedProcedure
+    .input(z.object({ attemptId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { supabase, user } = ctx;
+
+      const { data: attempt, error } = await supabase
+        .from('test_attempts')
+        .select('id, user_id, status, timer_seconds, time_used_seconds, was_timed')
+        .eq('id', input.attemptId)
+        .single();
+
+      if (error || !attempt) throw new TRPCError({ code: 'NOT_FOUND', message: 'Attempt not found' });
+      if (attempt.user_id !== user.id) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'That attempt is not yours' });
+      }
+      if (attempt.status === 'submitted') {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'This test is already submitted' });
+      }
+
+      const resumedAt = new Date().toISOString();
+      const { error: updateError } = await supabase
+        .from('test_attempts')
+        .update({ status: 'in_progress', resumed_at: resumedAt })
+        .eq('id', input.attemptId);
+
+      if (updateError) {
+        console.error('❌ [tests.resume] Failed to resume:', updateError);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not resume the test' });
+      }
+      return {
+        success: true,
+        resumedAt,
+        timeUsedSeconds: attempt.time_used_seconds ?? 0,
+        timerSeconds: attempt.timer_seconds,
+        timed: attempt.was_timed,
       };
     }),
 
@@ -440,7 +536,7 @@ export const testsRouter = createTRPCRouter({
 
       const { data: attempt, error: attemptError } = await supabase
         .from('test_attempts')
-        .select('id, user_id, bank_id, module_id, status, total_questions, correct_count, score_percent, time_used_seconds, submitted_at')
+        .select('id, user_id, bank_id, module_id, status, total_questions, correct_count, score_percent, time_used_seconds, submitted_at, started_at, resumed_at, timer_seconds, was_timed')
         .eq('id', input.attemptId)
         .single();
 
@@ -490,6 +586,19 @@ export const testsRouter = createTRPCRouter({
         (answers ?? []) as ScorableAnswer[],
       );
 
+      // Time used is computed server-side from the pause/resume accounting rather
+      // than trusted from the client: the frozen accumulator plus, if the sitting
+      // is still running (not paused), the active segment since `resumed_at`.
+      // Capped at the timer for timed sittings.
+      const activeSegment =
+        attempt.status === 'in_progress'
+          ? Math.max(0, Math.round((Date.now() - new Date(attempt.resumed_at ?? attempt.started_at).getTime()) / 1000))
+          : 0;
+      let timeUsedSeconds = (attempt.time_used_seconds ?? 0) + activeSegment;
+      if (attempt.was_timed && attempt.timer_seconds) {
+        timeUsedSeconds = Math.min(timeUsedSeconds, attempt.timer_seconds);
+      }
+
       // Persist the snapshot: attempt totals first, then per-answer correctness.
       const { error: updateError } = await supabase
         .from('test_attempts')
@@ -497,7 +606,7 @@ export const testsRouter = createTRPCRouter({
           correct_count: scored.correctCount,
           score_percent: scored.scorePercent,
           total_questions: scored.totalQuestions,
-          time_used_seconds: input.timeUsedSeconds,
+          time_used_seconds: timeUsedSeconds,
           status: 'submitted',
           submitted_at: new Date().toISOString(),
         })
@@ -535,7 +644,7 @@ export const testsRouter = createTRPCRouter({
 
       return buildResults(await loadReviewRows(ctx, input.attemptId), {
         alreadySubmitted: false,
-        timeUsedSeconds: input.timeUsedSeconds,
+        timeUsedSeconds,
       });
     }),
 
