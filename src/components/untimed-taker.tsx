@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTRPC } from '@/trpc/client';
 import { cn } from '@/lib/utils';
@@ -11,6 +11,7 @@ import { DesmosCalculator } from '@/components/desmos-calculator';
 import { SatReferenceSheet } from '@/components/sat-reference-sheet';
 import { Icon } from '@/components/ui/icon';
 import { LoadingDots } from '@/components/ui/loading-dots';
+import { HighlightSwatches, useHighlighter, type HighlightTool } from '@/components/highlighter';
 
 /**
  * Shared untimed taker: one question at a time, per-question stopwatch, and an
@@ -131,6 +132,39 @@ export function UntimedTaker({
   const st = states[q.id] ?? EMPTY_STATE;
   const isMath = q.section === 'math';
   const isSpr = q.answer_format === 'spr';
+
+  // Highlighter: a shared active tool, and one region each for the passage and
+  // the question stem. Content is memoised per question id so the injected
+  // <mark>s survive the taker's frequent re-renders (see highlighter.tsx).
+  const [tool, setTool] = useState<HighlightTool>(null);
+  const [hlOpen, setHlOpen] = useState(false);
+  const hlRef = useRef<HTMLDivElement | null>(null);
+  const passageHl = useHighlighter(`hl:qb:${q.id}:p`, tool);
+  const stemHl = useHighlighter(`hl:qb:${q.id}:s`, tool);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const passageContent = useMemo(() => <RichText>{q.passage ?? ''}</RichText>, [q.id]);
+  const stemContent = useMemo(
+    () => (isMath ? <MathHtml html={q.question_text} /> : <RichText>{q.question_text}</RichText>),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [q.id],
+  );
+
+  // Dismiss the highlighter popover on outside click / Escape.
+  useEffect(() => {
+    if (!hlOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (hlRef.current && !hlRef.current.contains(e.target as Node)) setHlOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setHlOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [hlOpen]);
 
   // Reset the stopwatch origin whenever the visible question changes.
   useEffect(() => {
@@ -343,6 +377,34 @@ export function UntimedTaker({
               Calculator
             </button>
           )}
+          {/* Highlighter — pick a colour, drag over passage/question to mark it. */}
+          <div className="relative" ref={hlRef}>
+            <button
+              onClick={() => setHlOpen((o) => !o)}
+              aria-pressed={tool != null}
+              title="Highlighter"
+              className={cn(
+                'flex items-center gap-1.5 rounded-md text-[12px] hover:text-[#6B6559]',
+                tool != null ? 'text-[#3B5BDB]' : 'text-[#9A9280]',
+              )}
+            >
+              <span aria-hidden className="text-[14px] leading-none">🖍️</span>
+              Highlight
+            </button>
+            {hlOpen && (
+              <div className="absolute right-0 top-full z-20 mt-2 rounded-xl border border-[#E7E0D2] bg-white p-2 shadow-[0_8px_24px_rgba(0,0,0,0.10)]">
+                <HighlightSwatches
+                  tool={tool}
+                  onTool={setTool}
+                  onClear={() => {
+                    passageHl.clear();
+                    stemHl.clear();
+                  }}
+                />
+              </div>
+            )}
+          </div>
+
           {/* "More" menu — houses the optional difficulty reveal. */}
           <div className="relative" ref={menuRef}>
             <button
@@ -442,8 +504,12 @@ export function UntimedTaker({
                   Passage
                 </p>
                 <div className="rounded-2xl border border-[#EFE9DC] bg-[#FFFDF8] px-7 py-6 shadow-[0_1px_0_rgba(0,0,0,0.02)]">
-                  <p className="qb-reading whitespace-pre-line text-[#2E2A23]">
-                    <RichText>{q.passage}</RichText>
+                  <p
+                    ref={passageHl.ref}
+                    onMouseUp={passageHl.onMouseUp}
+                    className={cn('qb-reading whitespace-pre-line text-[#2E2A23]', tool && 'cursor-text')}
+                  >
+                    {passageContent}
                   </p>
                 </div>
               </>
@@ -478,16 +544,14 @@ export function UntimedTaker({
               )}
             </div>
 
-            {/* Question stem */}
-            {isMath ? (
-              <div className="qb-reading mb-6 text-[#23201B]">
-                <MathHtml html={q.question_text} />
-              </div>
-            ) : (
-              <p className="qb-reading mb-6 font-bold text-[#23201B]">
-                <RichText>{q.question_text}</RichText>
-              </p>
-            )}
+            {/* Question stem — highlightable, memoised so marks persist. */}
+            <div
+              ref={stemHl.ref}
+              onMouseUp={stemHl.onMouseUp}
+              className={cn('qb-reading mb-6 text-[#23201B]', !isMath && 'font-bold', tool && 'cursor-text')}
+            >
+              {stemContent}
+            </div>
 
             {/* Answer: free-response (SPR) or multiple choice */}
             {isSpr ? (

@@ -10,6 +10,7 @@ import { RichText } from '@/components/rich-text';
 import { MathHtml } from '@/components/math-html';
 import { DesmosCalculator } from '@/components/desmos-calculator';
 import { SatReferenceSheet } from '@/components/sat-reference-sheet';
+import { HighlightSwatches, useHighlighter, type HighlightTool } from '@/components/highlighter';
 
 /**
  * The sitting screen, styled to mimic Bluebook — the real digital SAT app.
@@ -98,6 +99,50 @@ export default function TestPage() {
   }, []);
 
   const questions = useMemo(() => attempt.data?.questions ?? [], [attempt.data]);
+
+  // Highlighter — a shared active tool plus a region each for the passage and the
+  // question stem. Defined here (before the early returns) to keep hook order
+  // stable; content is memoised per question id so the injected marks survive the
+  // countdown's twice-a-second re-render (see highlighter.tsx).
+  const currentQ = questions[current];
+  const currentQid = currentQ?.id ?? 'none';
+  const [tool, setTool] = useState<HighlightTool>(null);
+  const [hlOpen, setHlOpen] = useState(false);
+  const hlRef = useRef<HTMLDivElement | null>(null);
+  const passageHl = useHighlighter(`hl:test:${currentQid}:p`, tool);
+  const stemHl = useHighlighter(`hl:test:${currentQid}:s`, tool);
+  const passageContent = useMemo(
+    () => <RichText>{currentQ?.passage ?? ''}</RichText>,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentQid],
+  );
+  const stemIsMath = (currentQ as { section?: string } | undefined)?.section === 'math';
+  const stemContent = useMemo(
+    () =>
+      stemIsMath ? (
+        <MathHtml html={currentQ?.question_text ?? ''} />
+      ) : (
+        <RichText>{currentQ?.question_text ?? ''}</RichText>
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentQid],
+  );
+
+  useEffect(() => {
+    if (!hlOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (hlRef.current && !hlRef.current.contains(e.target as Node)) setHlOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setHlOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [hlOpen]);
 
   // Rehydrate picks and flags — a refresh mid-sitting must not lose work.
   useEffect(() => {
@@ -394,10 +439,30 @@ export default function TestPage() {
               Calculator
             </button>
           )}
-          <span className="flex flex-col items-center gap-0.5 opacity-50">
-            <span aria-hidden className="text-[15px]">✎</span>
-            Highlights &amp; Notes
-          </span>
+          {/* Highlighter — pick a colour, drag over the passage/question to mark it. */}
+          <div className="relative" ref={hlRef}>
+            <button
+              onClick={() => setHlOpen((o) => !o)}
+              aria-pressed={tool != null}
+              title="Highlighter"
+              className={cn('flex flex-col items-center gap-0.5 hover:opacity-70', tool != null && 'text-[#324DC7]')}
+            >
+              <span aria-hidden className="text-[15px]">🖍️</span>
+              Highlights
+            </button>
+            {hlOpen && (
+              <div className="absolute right-0 top-full z-30 mt-2 rounded-xl border border-[#C9CEE0] bg-white p-2 shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
+                <HighlightSwatches
+                  tool={tool}
+                  onTool={setTool}
+                  onClear={() => {
+                    passageHl.clear();
+                    stemHl.clear();
+                  }}
+                />
+              </div>
+            )}
+          </div>
           <button
             onClick={() => setReviewing(true)}
             className="flex flex-col items-center gap-0.5 hover:opacity-70"
@@ -442,8 +507,12 @@ export default function TestPage() {
               description={(q as { visual_data?: string | null }).visual_data}
             />
             {q.passage && (
-              <div className="dsat-text whitespace-pre-line">
-                <RichText>{q.passage}</RichText>
+              <div
+                ref={passageHl.ref}
+                onMouseUp={passageHl.onMouseUp}
+                className={cn('dsat-text whitespace-pre-line', tool && 'cursor-text')}
+              >
+                {passageContent}
               </div>
             )}
           </section>
@@ -492,15 +561,13 @@ export default function TestPage() {
               </button>
             </div>
 
-            {isMath ? (
-              <div className="dsat-text mb-5">
-                <MathHtml html={q.question_text} />
-              </div>
-            ) : (
-              <p className="dsat-text dsat-bold mb-5">
-                <RichText>{q.question_text}</RichText>
-              </p>
-            )}
+            <div
+              ref={stemHl.ref}
+              onMouseUp={stemHl.onMouseUp}
+              className={cn('dsat-text mb-5', !isMath && 'dsat-bold', tool && 'cursor-text')}
+            >
+              {stemContent}
+            </div>
 
             {isSpr ? (
               <SprInput value={answers[q.id] ?? ''} onChange={typeAnswer} />
