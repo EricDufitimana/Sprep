@@ -856,6 +856,7 @@ type ReviewRow = {
   is_correct: boolean | null;
   flagged: boolean;
   self_diagnosis: string | null;
+  time_spent_ms: number | null;
   questions: {
     id: string;
     external_id: string | null;
@@ -893,6 +894,7 @@ async function loadReviewRows(
       is_correct,
       flagged,
       self_diagnosis,
+      time_spent_ms,
       questions (
         id, external_id, position, domain, skill, passage, question_text,
         options, correct_answer, explanation, has_visual, visual_data, visual_url,
@@ -971,6 +973,7 @@ function buildResults(
       isCorrect: r.is_correct ?? false,
       flagged: r.flagged,
       selfDiagnosis: r.self_diagnosis,
+      timeSpentMs: r.time_spent_ms,
     })),
   };
 }

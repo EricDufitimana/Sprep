@@ -118,6 +118,11 @@ export default function ResultsPage() {
         </Reveal>
       )}
 
+      {/* Pacing — time per domain, drillable to the slowest questions. */}
+      <Reveal className="mt-4">
+        <PacingByDomain questions={r.questions} />
+      </Reveal>
+
       {/* Redo the misses, untimed — a second attempt to see if it sticks. */}
       {missed > 0 && (
         <Reveal>
@@ -143,7 +148,7 @@ export default function ResultsPage() {
 
       <Reveal stagger className="space-y-4">
         {r.questions.map((q, i) => (
-          <Card key={q.questionId}>
+          <Card key={q.questionId} id={`q-${q.questionId}`} className="scroll-mt-24 target:ring-2 target:ring-blue">
             <CardBody>
               <QuestionMeta
                 label={`Q${i + 1}`}
@@ -183,6 +188,136 @@ export default function ResultsPage() {
         ))}
       </Reveal>
     </>
+  );
+}
+
+/** Human-friendly duration from ms: "48s" under a minute, else "m:ss". */
+function fmtDur(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+interface PacingQuestion {
+  questionId: string;
+  domain: string | null;
+  isCorrect: boolean;
+  timeSpentMs: number | null;
+}
+
+/**
+ * Pacing by domain: average time per question, slowest first, with a bar for
+ * quick comparison. Each domain expands to the questions that ate the most time,
+ * which link straight down to that question in the review below — so a slow
+ * domain can be analysed to the exact questions that dragged it.
+ */
+function PacingByDomain({ questions }: { questions: PacingQuestion[] }) {
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (d: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      next.has(d) ? next.delete(d) : next.add(d);
+      return next;
+    });
+
+  // Number each question as it appears in the review list, then group by domain.
+  const numbered = questions.map((q, i) => ({ ...q, n: i + 1 }));
+  const byDomain = new Map<string, (typeof numbered)>();
+  for (const q of numbered) {
+    if (!q.domain) continue;
+    const list = byDomain.get(q.domain);
+    if (list) list.push(q);
+    else byDomain.set(q.domain, [q]);
+  }
+
+  const rows = Array.from(byDomain.entries())
+    .map(([domain, qs]) => {
+      const timed = qs.filter((q) => q.timeSpentMs != null);
+      const totalMs = timed.reduce((s, q) => s + (q.timeSpentMs ?? 0), 0);
+      const avgMs = timed.length ? totalMs / timed.length : 0;
+      // Every question in the domain, longest first (untimed ones fall to the end).
+      const all = [...qs].sort((a, b) => (b.timeSpentMs ?? -1) - (a.timeSpentMs ?? -1));
+      return { domain, avgMs, totalMs, all, count: timed.length };
+    })
+    .filter((r) => r.count > 0)
+    .sort((a, b) => b.avgMs - a.avgMs);
+
+  if (rows.length === 0) return null;
+  const maxAvg = Math.max(...rows.map((r) => r.avgMs)) || 1;
+
+  return (
+    <Card>
+      <CardBody>
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-body font-semibold text-ink-900">Pacing by domain</h3>
+          <span className="text-micro text-ink-400">avg time / question</span>
+        </div>
+
+        <div className="mt-3 space-y-2">
+          {rows.map((r) => {
+            const isOpen = open.has(r.domain);
+            return (
+              <div key={r.domain} className="overflow-hidden rounded-control border border-line">
+                <button
+                  type="button"
+                  onClick={() => toggle(r.domain)}
+                  aria-expanded={isOpen}
+                  className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-sunken/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue"
+                >
+                  <span className="w-32 shrink-0 truncate text-small text-ink-700 sm:w-44">
+                    {domainLabel(r.domain)}
+                  </span>
+                  <span className="hidden h-2 flex-1 overflow-hidden rounded-pill bg-sunken sm:block">
+                    <span
+                      className="block h-full rounded-pill bg-blue"
+                      style={{ width: `${(r.avgMs / maxAvg) * 100}%` }}
+                    />
+                  </span>
+                  <span className="ml-auto w-14 shrink-0 text-right text-small font-semibold tabular-nums text-ink-900 sm:ml-0">
+                    {fmtDur(r.avgMs)}
+                  </span>
+                  <Icon
+                    name="chevron-down"
+                    className={cn('shrink-0 text-small text-ink-400 transition-transform', isOpen && 'rotate-180')}
+                  />
+                </button>
+
+                {isOpen && (
+                  <div className="border-t border-line bg-sunken/30 px-3 py-2.5">
+                    <p className="mb-1.5 text-micro font-medium uppercase tracking-wide text-ink-400">
+                      Every question · longest first · total {fmtDur(r.totalMs)}
+                    </p>
+                    <div className="space-y-0.5">
+                      {r.all.map((q) => (
+                        <a
+                          key={q.questionId}
+                          href={`#q-${q.questionId}`}
+                          className="group flex items-center justify-between gap-3 rounded-control px-2 py-1.5 hover:bg-surface"
+                        >
+                          <span className="flex items-center gap-2 text-small">
+                            <span className="font-semibold text-ink-900">Q{q.n}</span>
+                            <span className={q.isCorrect ? 'text-green' : 'text-miss'}>
+                              {q.isCorrect ? 'correct' : 'missed'}
+                            </span>
+                          </span>
+                          <span className="flex items-center gap-1.5 text-small font-medium tabular-nums text-ink-900">
+                            {q.timeSpentMs != null ? fmtDur(q.timeSpentMs) : '—'}
+                            <Icon
+                              name="arrow-right"
+                              className="text-[10px] text-ink-400 transition-transform group-hover:translate-x-0.5"
+                            />
+                          </span>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </CardBody>
+    </Card>
   );
 }
 
