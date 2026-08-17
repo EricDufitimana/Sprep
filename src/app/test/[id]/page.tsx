@@ -508,6 +508,7 @@ export default function TestPage() {
             />
             {q.passage && (
               <div
+                key={q.id}
                 ref={passageHl.ref}
                 onMouseUp={passageHl.onMouseUp}
                 className={cn('dsat-text whitespace-pre-line', tool && 'cursor-text')}
@@ -562,6 +563,7 @@ export default function TestPage() {
             </div>
 
             <div
+              key={q.id}
               ref={stemHl.ref}
               onMouseUp={stemHl.onMouseUp}
               className={cn('dsat-text mb-5', !isMath && 'dsat-bold', tool && 'cursor-text')}

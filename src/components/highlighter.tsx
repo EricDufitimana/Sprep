@@ -67,7 +67,11 @@ function offsetOf(root: Node, node: Node, nodeOffset: number): number {
 
 /** Strip every highlight `<mark>` back to plain text. */
 function unwrap(root: HTMLElement) {
-  root.querySelectorAll('mark[data-hl]').forEach((m) => {
+  const marks = root.querySelectorAll('mark[data-hl]');
+  // Never touch the DOM when there's nothing to undo — normalising React-managed
+  // text nodes when no highlights exist is what corrupts navigation.
+  if (marks.length === 0) return;
+  marks.forEach((m) => {
     const parent = m.parentNode;
     if (!parent) return;
     while (m.firstChild) parent.insertBefore(m.firstChild, m);

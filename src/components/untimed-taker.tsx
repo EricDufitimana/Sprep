@@ -505,6 +505,7 @@ export function UntimedTaker({
                 </p>
                 <div className="rounded-2xl border border-[#EFE9DC] bg-[#FFFDF8] px-7 py-6 shadow-[0_1px_0_rgba(0,0,0,0.02)]">
                   <p
+                    key={q.id}
                     ref={passageHl.ref}
                     onMouseUp={passageHl.onMouseUp}
                     className={cn('qb-reading whitespace-pre-line text-[#2E2A23]', tool && 'cursor-text')}
@@ -546,6 +547,7 @@ export function UntimedTaker({
 
             {/* Question stem — highlightable, memoised so marks persist. */}
             <div
+              key={q.id}
               ref={stemHl.ref}
               onMouseUp={stemHl.onMouseUp}
               className={cn('qb-reading mb-6 text-[#23201B]', !isMath && 'font-bold', tool && 'cursor-text')}
