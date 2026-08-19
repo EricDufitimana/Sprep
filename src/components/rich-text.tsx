@@ -1,4 +1,5 @@
 import { isValidElement, type ReactNode } from 'react';
+import { decodeEntities } from '@/utils/decode-entities';
 
 /**
  * Render SAT question text that carries a small whitelist of HTML formatting.
@@ -114,7 +115,7 @@ function isBr(node: ReactNode): boolean {
 
 function parseRich(text: string): ReactNode[] {
   if (!text) return [];
-  if (!text.includes('<') && !text.includes('\n')) return [text];
+  if (!text.includes('<') && !text.includes('\n')) return [decodeEntities(text)];
 
   const root: Frame = { tag: '', children: [] };
   const stack: Frame[] = [root];
@@ -140,7 +141,7 @@ function parseRich(text: string): ReactNode[] {
     const lines = s.split('\n');
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) top.children.push(<br key={nextKey()} />);
-      if (lines[i]) top.children.push(lines[i]);
+      if (lines[i]) top.children.push(decodeEntities(lines[i]));
     }
   };
 
