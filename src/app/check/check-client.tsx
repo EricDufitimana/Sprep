@@ -124,9 +124,15 @@ export function CheckClient() {
         {/* Results */}
         {result && (
           <Reveal className="mt-6 space-y-6">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
               <Stat label="Pasted" value={result.totalPasted} />
               <Stat label="Already in bank" value={result.matchedCount} tone="coral" />
+              <Stat
+                label="Active Bluebook"
+                value={result.activeMatchCount}
+                tone="amber"
+                hint="of the matches, still live"
+              />
               <Stat label="New (kept)" value={result.remainingCount} tone="green" />
               <Stat label="In bank total" value={result.totalStored} />
             </div>
@@ -178,6 +184,7 @@ export function CheckClient() {
                             {m.stored.difficulty && (
                               <Badge tone="amber">{m.stored.difficulty}</Badge>
                             )}
+                            {m.stored.isActive && <Badge tone="amber">active Bluebook</Badge>}
                             {m.stored.isDefault && <Badge tone="neutral">default bank</Badge>}
                             <Badge tone={REASON[m.reason].tone}>{REASON[m.reason].label}</Badge>
                           </div>

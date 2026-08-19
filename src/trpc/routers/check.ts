@@ -126,6 +126,7 @@ type StoredRow = {
   section: string | null;
   difficulty: string | null;
   is_default: boolean | null;
+  active: boolean | null;
 };
 
 type MatchReason = 'exact' | 'passage' | 'id';
@@ -165,7 +166,7 @@ export const checkRouter = createTRPCRouter({
       const stored = await fetchAllRows<StoredRow>((from, to) =>
         ctx.supabase
           .from('questions')
-          .select('external_id, passage, question_text, skill, domain, section, difficulty, is_default')
+          .select('external_id, passage, question_text, skill, domain, section, difficulty, is_default, active')
           .order('id', { ascending: true })
           .range(from, to),
       );
@@ -193,6 +194,7 @@ export const checkRouter = createTRPCRouter({
           section: string | null;
           difficulty: string | null;
           isDefault: boolean;
+          isActive: boolean;
         };
       }> = [];
       const remaining: Record<string, unknown>[] = [];
@@ -240,6 +242,7 @@ export const checkRouter = createTRPCRouter({
               section: hit.section,
               difficulty: hit.difficulty,
               isDefault: !!hit.is_default,
+              isActive: hit.active === true,
             },
           });
         } else {
@@ -251,6 +254,8 @@ export const checkRouter = createTRPCRouter({
         totalPasted: objects.length,
         totalStored: stored.length,
         matchedCount: matched.length,
+        // Of the duplicates, how many are still live in Bluebook (active === true).
+        activeMatchCount: matched.filter((m) => m.stored.isActive).length,
         remainingCount: remaining.length,
         noTextCount,
         matched,
