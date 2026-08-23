@@ -159,13 +159,82 @@ export default function TestPage() {
 
   const save = useMutation(trpc.answers.save.mutationOptions());
 
-  // When the visible question changes, flush the time spent on the one being
-  // left so its dwell time is persisted even if the student never re-picks.
+  // Strict-ordering autosave queue. Every write goes through here and is chained
+  // after the previous one, so two saves to the same (attempt, question) row can
+  // never commit out of order — no matter how the network reorders requests.
+  // This is the actual guarantee against the truncation bug (typing "94" saved
+  // as "9"): the earlier keystroke's write can no longer overtake the later one.
+  // Debouncing below still cuts the number of writes; ordering is what makes the
+  // race impossible rather than merely rare. Errors are swallowed (autosave is
+  // best-effort and also flushed on leave/submit) but never break the chain.
+  const saveChain = useRef<Promise<unknown>>(Promise.resolve());
+  const enqueueSave = useCallback(
+    (payload: {
+      attemptId: string;
+      questionId: string;
+      selectedAnswer?: string | null;
+      flagged?: boolean;
+      timeSpentMs?: number;
+    }) => {
+      saveChain.current = saveChain.current
+        .catch(() => {})
+        .then(() => save.mutateAsync(payload))
+        .catch(() => {});
+    },
+    [save],
+  );
+
+  // Latest answers in a ref so the debounced/flush saves below read the current
+  // value without a stale closure.
+  const answersRef = useRef(answers);
+  useEffect(() => {
+    answersRef.current = answers;
+  }, [answers]);
+
+  // ── SPR autosave: debounced, then flushed on leave/submit ──────────────────
+  // Each keystroke used to fire its own save.mutate. Those writes hit the same
+  // (attempt, question) row concurrently with no ordering guarantee, so an
+  // earlier keystroke's value could commit last — typing "94" was saved as "9",
+  // "-12" as "-1". Debouncing coalesces a burst into one write, and every
+  // question-change / submit flushes the final typed value as a single
+  // authoritative save, so the last thing on screen is always what's stored.
+  const sprSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sprPendingQid = useRef<string | null>(null);
+
+  /**
+   * Persist a question's answer + banked time in one write, cancelling any
+   * pending debounced SPR save for it first. One write per call means no
+   * concurrent same-row upserts, so writes can't land out of order.
+   */
+  const flushSave = useCallback(
+    (qid: string) => {
+      if (sprSaveTimer.current && sprPendingQid.current === qid) {
+        clearTimeout(sprSaveTimer.current);
+        sprSaveTimer.current = null;
+        sprPendingQid.current = null;
+      }
+      enqueueSave({
+        attemptId,
+        questionId: qid,
+        selectedAnswer: answersRef.current[qid] ?? null,
+        timeSpentMs: accumulateTime(qid),
+      });
+    },
+    [attemptId, enqueueSave, accumulateTime],
+  );
+
+  // Cancel a dangling debounce timer on unmount.
+  useEffect(() => () => {
+    if (sprSaveTimer.current) clearTimeout(sprSaveTimer.current);
+  }, []);
+
+  // When the visible question changes, flush the one being left — its final
+  // answer and the time spent on it — even if the student never re-picks.
   useEffect(() => {
     const nextQid = questions[current]?.id ?? null;
     const leaving = prevQid.current;
     if (leaving && leaving !== nextQid) {
-      save.mutate({ attemptId, questionId: leaving, timeSpentMs: accumulateTime(leaving) });
+      flushSave(leaving);
     }
     qStartedAt.current = Date.now();
     prevQid.current = nextQid;
@@ -207,14 +276,15 @@ export default function TestPage() {
     if (submitted) return;
     setError(null);
     setSubmitted(true);
-    // Flush the time spent on the question currently on screen before grading.
+    // Flush the on-screen question's final answer and its time before grading,
+    // so a value still sitting in the debounce is never lost at submit.
     const leaving = prevQid.current;
     if (leaving) {
-      save.mutate({ attemptId, questionId: leaving, timeSpentMs: accumulateTime(leaving) });
+      flushSave(leaving);
     }
     const elapsed = Math.round((Date.now() - startedAt.current) / 1000);
     submit.mutate({ attemptId, timeUsedSeconds: elapsed });
-  }, [submitted, submit, attemptId, save, accumulateTime]);
+  }, [submitted, submit, attemptId, flushSave]);
 
   // Countdown, mirroring Bluebook's m:ss readout in the header.
   const timerSeconds = attempt.data?.timerSeconds ?? null;
@@ -342,7 +412,7 @@ export default function TestPage() {
     if (locked) return;
     const next = answers[q.id] === letter ? null : letter;
     setAnswers((prev) => ({ ...prev, [q.id]: next }));
-    save.mutate({
+    enqueueSave({
       attemptId,
       questionId: q.id,
       selectedAnswer: next,
@@ -350,24 +420,37 @@ export default function TestPage() {
     });
   };
 
-  /** SPR grid-in: store the raw typed string as the selected answer. */
+  /**
+   * SPR grid-in: reflect the typed string immediately (local state keeps the
+   * field responsive) but debounce the network save so a burst of keystrokes
+   * becomes one write instead of many racing same-row upserts. The final value
+   * is also flushed on question-change / submit via `flushSave`, so nothing
+   * typed can be lost.
+   */
   const typeAnswer = (value: string) => {
     if (locked) return;
     const next = value === '' ? null : value;
-    setAnswers((prev) => ({ ...prev, [q.id]: next }));
-    save.mutate({
-      attemptId,
-      questionId: q.id,
-      selectedAnswer: next,
-      timeSpentMs: accumulateTime(q.id),
-    });
+    const qid = q.id;
+    setAnswers((prev) => ({ ...prev, [qid]: next }));
+    if (sprSaveTimer.current) clearTimeout(sprSaveTimer.current);
+    sprPendingQid.current = qid;
+    sprSaveTimer.current = setTimeout(() => {
+      sprSaveTimer.current = null;
+      sprPendingQid.current = null;
+      enqueueSave({
+        attemptId,
+        questionId: qid,
+        selectedAnswer: answersRef.current[qid] ?? null,
+        timeSpentMs: accumulateTime(qid),
+      });
+    }, 500);
   };
 
   const toggleFlag = () => {
     if (locked) return;
     const next = !flags[q.id];
     setFlags((prev) => ({ ...prev, [q.id]: next }));
-    save.mutate({ attemptId, questionId: q.id, flagged: next, timeSpentMs: accumulateTime(q.id) });
+    enqueueSave({ attemptId, questionId: q.id, flagged: next, timeSpentMs: accumulateTime(q.id) });
   };
 
   const toggleStrike = (letter: string) => {

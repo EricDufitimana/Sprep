@@ -65,27 +65,33 @@
     display: none;
   }
 
-  /**
-   * Screen-reader-only. The math corpus ships a spoken "long description" for
-   * every figure — e.g. a scatterplot's points as "(15 comma 21.80)" or a
-   * vertex as "upper A" — inside `class="sr-only"`, meant to be read aloud, not
-   * shown. This markup is injected via dangerouslySetInnerHTML, so Tailwind's
-   * content scan never sees the class and (in v3) purges its own `.sr-only`
-   * utility; without this rule those descriptions render as visible text and
-   * coordinates literally read "comma". Clip-based hiding keeps them in the
-   * accessibility tree for screen readers while removing them visually.
-   */
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
+}
+
+/**
+ * Screen-reader-only. The math corpus ships a spoken "long description" for
+ * every figure — e.g. a scatterplot's points as "(15 comma 21.80)" or a
+ * vertex as "upper A" — inside `class="sr-only"`, meant to be read aloud, not
+ * shown. This markup is injected via dangerouslySetInnerHTML, so Tailwind's
+ * content scan never sees the class.
+ *
+ * This rule MUST live outside `@layer utilities`: Tailwind v3 tree-shakes every
+ * class it emits from a layer, including custom ones, keeping only those it
+ * finds in the scanned source (.tsx). Because `sr-only` appears only in injected
+ * DB content, an in-layer definition is purged — the exact bug that made these
+ * long descriptions render as visible text (coordinates literally reading
+ * "comma"). As plain top-level CSS it is never purged. Clip-based hiding keeps
+ * them in the accessibility tree for screen readers while removing them visually.
+ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /**
@@ -110,9 +116,17 @@
 .math-html .italic {
   font-style: italic;
 }
-/* Figures: never let a wide graph or data-URI image blow out the column. */
+/* Figures: never let a wide graph or data-URI image blow out the column.
+ *
+ * Scoped to *figure* SVGs only — those the corpus ships inline (parent is a
+ * <figure>/<p>, i.e. not an mjx-container). MathJax renders every inline
+ * equation to its own <svg> inside an <mjx-container>; catching those with a
+ * blanket `.math-html svg { display:block; margin:auto }` turned each inline
+ * equation into a centered block, stacking a sentence's numbers vertically down
+ * the page. Excluding mjx-container's child keeps inline math flowing in text. */
 .math-html img,
-.math-html svg {
+.math-html > svg,
+.math-html :not(mjx-container) > svg {
   max-width: 100%;
   height: auto;
   display: block;

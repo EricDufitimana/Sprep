@@ -26,6 +26,9 @@ export default function ResultsPage() {
 
   // "Redo your misses" — an untimed second pass over just the wrong ones.
   const [redoing, setRedoing] = useState(false);
+
+  // Review filter: the whole sitting, or just the questions that were missed.
+  const [reviewFilter, setReviewFilter] = useState<'all' | 'missed'>('all');
   const failed = useQuery({
     ...trpc.tests.failedQuestions.queryOptions({ attemptId }),
     enabled: redoing,
@@ -144,49 +147,89 @@ export default function ResultsPage() {
         </Reveal>
       )}
 
-      <h2 className="mb-3 mt-8 text-h2 font-semibold text-ink-900">Question review</h2>
-
-      <Reveal stagger className="space-y-4">
-        {r.questions.map((q, i) => (
-          <Card key={q.questionId} id={`q-${q.questionId}`} className="scroll-mt-24 target:ring-2 target:ring-blue">
-            <CardBody>
-              <QuestionMeta
-                label={`Q${i + 1}`}
-                correct={q.isCorrect}
-                unanswered={q.selectedAnswer === null}
-                skill={q.skill}
-                flagged={q.flagged}
-                externalId={q.externalId}
-              />
-              <QuestionReview
-                question={{
-                  questionText: q.questionText,
-                  passage: q.passage,
-                  options: q.options,
-                  correctAnswer: q.correctAnswer,
-                  explanation: q.explanation,
-                  yourAnswer: q.selectedAnswer,
-                  visualUrl: q.visualUrl,
-                  visualData: q.visualData,
-                  section: q.section,
-                  answerFormat: q.answerFormat,
-                }}
-                // Questions they got right have nothing to reveal — show them
-                // already confirmed, no button. Missed/blank keep the reveal.
-                showReveal={!q.isCorrect}
-                defaultRevealed={q.isCorrect}
-              />
-              {!q.isCorrect && (
-                <DiagnosisPicker
-                  attemptId={attemptId}
-                  questionId={q.questionId}
-                  initial={(q.selfDiagnosis as DiagnosisKey | null) ?? null}
-                />
+      <div className="mb-3 mt-8 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-h2 font-semibold text-ink-900">Question review</h2>
+        {/* Filter the review to just the misses — the ones worth re-studying. */}
+        <div className="flex rounded-pill border border-line p-0.5">
+          {(
+            [
+              ['all', `All ${r.totalQuestions}`],
+              ['missed', `Missed ${missed}`],
+            ] as const
+          ).map(([key, text]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setReviewFilter(key)}
+              aria-pressed={reviewFilter === key}
+              className={cn(
+                'rounded-pill px-3 py-1 text-small transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue',
+                reviewFilter === key
+                  ? 'bg-ink-900 font-medium text-surface'
+                  : 'text-ink-700 hover:text-ink-900',
               )}
-            </CardBody>
-          </Card>
-        ))}
-      </Reveal>
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {reviewFilter === 'missed' && missed === 0 ? (
+        <Card>
+          <CardBody>
+            <p className="text-small text-ink-500">
+              Nothing missed this sitting — every question was correct.
+            </p>
+          </CardBody>
+        </Card>
+      ) : (
+        <Reveal stagger className="space-y-4">
+          {r.questions
+            .map((q, i) => ({ q, i }))
+            .filter(({ q }) => reviewFilter === 'all' || !q.isCorrect)
+            .map(({ q, i }) => (
+              <Card key={q.questionId} id={`q-${q.questionId}`} className="scroll-mt-24 target:ring-2 target:ring-blue">
+                <CardBody>
+                  <QuestionMeta
+                    label={`Q${i + 1}`}
+                    correct={q.isCorrect}
+                    unanswered={q.selectedAnswer === null}
+                    skill={q.skill}
+                    flagged={q.flagged}
+                    externalId={q.externalId}
+                  />
+                  <QuestionReview
+                    question={{
+                      questionText: q.questionText,
+                      passage: q.passage,
+                      options: q.options,
+                      correctAnswer: q.correctAnswer,
+                      explanation: q.explanation,
+                      yourAnswer: q.selectedAnswer,
+                      visualUrl: q.visualUrl,
+                      visualData: q.visualData,
+                      section: q.section,
+                      answerFormat: q.answerFormat,
+                    }}
+                    // Questions they got right have nothing to reveal — show them
+                    // already confirmed, no button. Missed/blank keep the reveal.
+                    showReveal={!q.isCorrect}
+                    defaultRevealed={q.isCorrect}
+                  />
+                  {!q.isCorrect && (
+                    <DiagnosisPicker
+                      attemptId={attemptId}
+                      questionId={q.questionId}
+                      initial={(q.selfDiagnosis as DiagnosisKey | null) ?? null}
+                    />
+                  )}
+                </CardBody>
+              </Card>
+            ))}
+        </Reveal>
+      )}
     </>
   );
 }
