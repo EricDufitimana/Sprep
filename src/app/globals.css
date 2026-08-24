@@ -8,6 +8,17 @@
     @apply border-line;
   }
 
+  /* Kill the document-level rubber-band / scroll-chaining. On the fixed app
+     shell (dashboard: an `h-dvh` root whose only real scroller is the content
+     card's <main>), dragging over the paper gutter used to bounce or scroll the
+     whole page past its content. `overscroll-behavior: none` stops that at the
+     viewport without disabling normal scrolling on pages that legitimately grow
+     past the viewport (the `min-h-dvh` landing/onboarding screens still scroll). */
+  html,
+  body {
+    overscroll-behavior: none;
+  }
+
   ::selection {
     @apply bg-blue-tint text-ink-900;
   }

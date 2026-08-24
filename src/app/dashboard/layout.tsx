@@ -15,7 +15,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col p-3 md:py-4 md:pl-0 md:pr-4">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-card border border-line bg-surface shadow-lift">
-          <main className="flex-1 overflow-y-auto px-8 py-8">{children}</main>
+          {/* The one scroller in the shell. `overscroll-contain` keeps its scroll
+              from chaining out to the page when it hits the top/bottom. */}
+          <main className="flex-1 overflow-y-auto overscroll-contain px-8 py-8">{children}</main>
         </div>
       </div>
     </div>
