@@ -356,6 +356,7 @@ function PracticeInner() {
   const [configuring, setConfiguring] = useState<Configuring | null>(null);
   const [mode, setMode] = useState<'timed' | 'untimed'>('timed');
   const [minutes, setMinutes] = useState(20);
+  const [seconds, setSeconds] = useState(0);
   const [count, setCount] = useState(8);
   const [excludeSeen, setExcludeSeen] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
@@ -418,7 +419,12 @@ function PracticeInner() {
     setStartError(null);
     const common = {
       timed: mode === 'timed',
-      timerSeconds: mode === 'timed' ? minutes * 60 : undefined,
+      // Minutes + seconds → total seconds, clamped to the server's bounds
+      // (60s min, 10800s / 180min max).
+      timerSeconds:
+        mode === 'timed'
+          ? Math.max(60, Math.min(10800, minutes * 60 + seconds))
+          : undefined,
     };
     if (configuring.kind === 'bank') {
       start.mutate({ ...common, bankId: configuring.bank.id, questionCount: count, excludeSeen });
@@ -853,16 +859,33 @@ function PracticeInner() {
           </div>
 
           {mode === 'timed' && (
-            <Input
-              label="Timer (minutes)"
-              type="number"
-              min={5}
-              max={180}
-              value={minutes}
-              onChange={(e) => setMinutes(Math.max(5, Math.min(180, Number(e.target.value) || 5)))}
-              hint="5–180 minutes"
-              className="max-w-[10rem]"
-            />
+            <div>
+              <p className="mb-1.5 text-small font-medium text-ink-700">Timer</p>
+              <div className="flex items-start gap-3">
+                <Input
+                  aria-label="Timer minutes"
+                  type="number"
+                  min={0}
+                  max={180}
+                  value={minutes}
+                  onChange={(e) => setMinutes(Math.max(0, Math.min(180, Math.floor(Number(e.target.value) || 0))))}
+                  hint="min"
+                  className="w-24"
+                />
+                <span className="pt-2 text-body text-ink-400">:</span>
+                <Input
+                  aria-label="Timer seconds"
+                  type="number"
+                  min={0}
+                  max={59}
+                  value={seconds}
+                  onChange={(e) => setSeconds(Math.max(0, Math.min(59, Math.floor(Number(e.target.value) || 0))))}
+                  hint="sec"
+                  className="w-24"
+                />
+              </div>
+              <p className="mt-1 text-micro text-ink-400">At least 1 minute, up to 3 hours.</p>
+            </div>
           )}
 
           {/* A module's length and mix are fixed by its recipe; only banks pick a count. */}

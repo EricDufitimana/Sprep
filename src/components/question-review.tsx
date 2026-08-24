@@ -69,7 +69,7 @@ export function QuestionReview({
       <QuestionFigure url={question.visualUrl} description={question.visualData} className="my-3" />
 
       {question.passage && (
-        <div className="mb-3 whitespace-pre-line text-small leading-6 text-ink-500">
+        <div className={cn('mb-3 text-small leading-6 text-ink-500', !isMath && 'whitespace-pre-line')}>
           <QText isMath={isMath}>{question.passage}</QText>
         </div>
       )}
@@ -128,7 +128,13 @@ export function QuestionReview({
             <p className="mb-1 text-micro font-medium uppercase tracking-wide text-ink-400">
               Why
             </p>
-            <div className="whitespace-pre-line text-small leading-6 text-ink-700">
+            {/* `whitespace-pre-line` only for R&W text, whose paragraph breaks are
+                real newlines. Math explanations are HTML whose MathML source is
+                pretty-printed with newlines between every tag; honoring those as
+                line breaks stacks each number/word onto its own line. Math gets
+                its structure from its own <p>/<br>, so those newlines must
+                collapse — matching how <UntimedTaker> renders explanations. */}
+            <div className={cn('text-small leading-6 text-ink-700', !isMath && 'whitespace-pre-line')}>
               <QText isMath={isMath}>{question.explanation}</QText>
             </div>
           </div>

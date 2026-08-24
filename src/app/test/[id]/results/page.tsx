@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardBody } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
+import { Modal } from '@/components/ui/modal';
 import { ProgressBar } from '@/components/ui/progress-bar';
 import { QuestionMeta, QuestionReview } from '@/components/question-review';
 import { UntimedTaker, type BuiltQuestion } from '@/components/untimed-taker';
@@ -29,6 +30,9 @@ export default function ResultsPage() {
 
   // Review filter: the whole sitting, or just the questions that were missed.
   const [reviewFilter, setReviewFilter] = useState<'all' | 'missed'>('all');
+
+  // Pacing drill-down: open a question in a dialog instead of scrolling to it.
+  const [openQuestionId, setOpenQuestionId] = useState<string | null>(null);
   const failed = useQuery({
     ...trpc.tests.failedQuestions.queryOptions({ attemptId }),
     enabled: redoing,
@@ -123,7 +127,7 @@ export default function ResultsPage() {
 
       {/* Pacing — time per domain, drillable to the slowest questions. */}
       <Reveal className="mt-4">
-        <PacingByDomain questions={r.questions} />
+        <PacingByDomain questions={r.questions} onOpenQuestion={setOpenQuestionId} />
       </Reveal>
 
       {/* Redo the misses, untimed — a second attempt to see if it sticks. */}
@@ -230,6 +234,50 @@ export default function ResultsPage() {
             ))}
         </Reveal>
       )}
+
+      {/* Pacing drill-down: the clicked question, shown right here in a dialog so
+          there's no scroll-and-hunt down to the review list. */}
+      {(() => {
+        const idx = r.questions.findIndex((q) => q.questionId === openQuestionId);
+        const q = idx >= 0 ? r.questions[idx] : null;
+        return (
+          <Modal
+            open={!!q}
+            onClose={() => setOpenQuestionId(null)}
+            title={q ? `Question ${idx + 1}` : ''}
+            className="max-w-2xl max-h-[85vh]"
+          >
+            {q && (
+              <div className="max-h-[72vh] overflow-y-auto pr-1">
+                <QuestionMeta
+                  correct={q.isCorrect}
+                  unanswered={q.selectedAnswer === null}
+                  skill={q.skill}
+                  flagged={q.flagged}
+                  externalId={q.externalId}
+                />
+                <QuestionReview
+                  key={q.questionId}
+                  question={{
+                    questionText: q.questionText,
+                    passage: q.passage,
+                    options: q.options,
+                    correctAnswer: q.correctAnswer,
+                    explanation: q.explanation,
+                    yourAnswer: q.selectedAnswer,
+                    visualUrl: q.visualUrl,
+                    visualData: q.visualData,
+                    section: q.section,
+                    answerFormat: q.answerFormat,
+                  }}
+                  showReveal={!q.isCorrect}
+                  defaultRevealed={q.isCorrect}
+                />
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
     </>
   );
 }
@@ -250,11 +298,17 @@ interface PacingQuestion {
 
 /**
  * Pacing by domain: average time per question, slowest first, with a bar for
- * quick comparison. Each domain expands to the questions that ate the most time,
- * which link straight down to that question in the review below — so a slow
- * domain can be analysed to the exact questions that dragged it.
+ * quick comparison. Each domain expands to the questions that ate the most time;
+ * clicking one opens it in a dialog (via `onOpenQuestion`) so a slow domain can
+ * be analysed to the exact questions that dragged it, with no scroll-and-hunt.
  */
-function PacingByDomain({ questions }: { questions: PacingQuestion[] }) {
+function PacingByDomain({
+  questions,
+  onOpenQuestion,
+}: {
+  questions: PacingQuestion[];
+  onOpenQuestion: (questionId: string) => void;
+}) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (d: string) =>
     setOpen((prev) => {
@@ -332,10 +386,11 @@ function PacingByDomain({ questions }: { questions: PacingQuestion[] }) {
                     </p>
                     <div className="space-y-0.5">
                       {r.all.map((q) => (
-                        <a
+                        <button
                           key={q.questionId}
-                          href={`#q-${q.questionId}`}
-                          className="group flex items-center justify-between gap-3 rounded-control px-2 py-1.5 hover:bg-surface"
+                          type="button"
+                          onClick={() => onOpenQuestion(q.questionId)}
+                          className="group flex w-full items-center justify-between gap-3 rounded-control px-2 py-1.5 text-left hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue"
                         >
                           <span className="flex items-center gap-2 text-small">
                             <span className="font-semibold text-ink-900">Q{q.n}</span>
@@ -350,7 +405,7 @@ function PacingByDomain({ questions }: { questions: PacingQuestion[] }) {
                               className="text-[10px] text-ink-400 transition-transform group-hover:translate-x-0.5"
                             />
                           </span>
-                        </a>
+                        </button>
                       ))}
                     </div>
                   </div>
