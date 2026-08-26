@@ -143,6 +143,20 @@
   display: block;
   margin: 0.75rem auto;
 }
+/* App-generated graphs (see scripts/lib/graph-svg.mjs). Axes/grid/labels draw
+   in `currentColor`, so they follow the surrounding text color for free; the
+   two vars below are the only baked colors and can be retimed here. Wrap them
+   in a centered figure with a little breathing room. */
+.math-html .graph-figure {
+  --graph-plot: #2563eb; /* primary plotted series */
+  --graph-bg: #ffffff; /* fill that "punches a hole" for open (hollow) dots */
+  margin: 0.75rem auto;
+  text-align: center;
+}
+.math-html .graph-figure svg {
+  max-width: 100%;
+  height: auto;
+}
 /* Inline equation images (the source ships some fractions as a base64 <img>
    inside a run of text) must flow with the sentence, not break onto their own
    centered line like a figure does. */
@@ -179,6 +193,25 @@
 .math-html th {
   font-weight: 600;
   background: var(--color-sunken, #f8fafc);
+}
+/* App-generated tables (see scripts/lib/table-html.mjs). Center the figure and
+   let the table shrink to its content instead of filling the column; it still
+   scrolls horizontally on its own if a row is too wide for a narrow screen. */
+.math-html .table-figure {
+  margin: 0.75rem auto;
+  text-align: center;
+}
+.math-html .table-figure table {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0;
+  text-align: left;
+}
+.math-html .table-caption {
+  margin-top: 0.35rem;
+  font-size: 0.8125rem;
+  color: var(--color-ink-600, #6b7280);
 }
 
 @media (prefers-reduced-motion: reduce) {

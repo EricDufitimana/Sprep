@@ -21,6 +21,27 @@
 import { readFileSync } from 'node:fs';
 import { PrismaClient } from '@prisma/client';
 import { reconcile, buildAcceptedAnswers } from './lib/spr-answer-reconcile.mjs';
+import { renderGraphSvg, expandGraphMarkers } from './lib/graph-svg.mjs';
+import { renderTableHtml, expandTableMarkers } from './lib/table-html.mjs';
+
+/**
+ * Build an id→rendered-HTML map for one source record from a single-spec field
+ * and/or a map field, rendering each spec with `render`. Used for both figures:
+ *   • graphs: single `graph`  + map `graphs`  (markers `{{graph}}` / `{{graph:ID}}`)
+ *   • tables: single `table`  + map `tables`  (markers `{{table}}` / `{{table:ID}}`)
+ * The single spec is stored under the default id (`kind`), which is what the bare
+ * `{{graph}}` / `{{table}}` marker resolves to. Rendering here means a malformed
+ * spec fails the whole ingest loudly instead of shipping a blank box.
+ */
+function buildFigures(src, kind, render) {
+  const out = {};
+  if (src[kind]) out[kind] = render(src[kind]);
+  const mapField = src[kind + 's']; // "graphs" / "tables"
+  if (mapField && typeof mapField === 'object') {
+    for (const [id, spec] of Object.entries(mapField)) out[id] = render(spec);
+  }
+  return out;
+}
 
 /* domain code → question_domain enum value */
 const DOMAIN_MAP = {
@@ -73,12 +94,26 @@ export function mapMathQuestion(src) {
   const difficulty = DIFFICULTY_MAP[src.difficulty];
   if (!difficulty) return { skip: 'bad_difficulty', extId, detail: src.difficulty };
 
-  const question_text = tidy(src.stem);
+  // Declarative graphs and tables → inline SVG / HTML, placed wherever their
+  // markers sit (or the default figure appended). A bad spec throws → caught by
+  // the loop. `enrich` runs both expansions on any rich field (stem, choices,
+  // rationale), so a figure marker works in whichever of them it appears.
+  const graphSvgs = buildFigures(src, 'graph', renderGraphSvg);
+  const tableHtml = buildFigures(src, 'table', renderTableHtml);
+  const enrich = (html) => expandTableMarkers(expandGraphMarkers(tidy(html), graphSvgs), tableHtml);
+
+  const question_text = enrich(src.stem);
   if (!question_text) return { skip: 'empty_stem', extId };
 
   const answer_format = src.type === 'spr' ? 'spr' : 'mcq';
   const content = src.content || {};
-  const has_visual = Boolean(content.hasSvg || content.hasImage || content.hasTable);
+  const has_visual = Boolean(
+    content.hasSvg ||
+      content.hasImage ||
+      content.hasTable ||
+      Object.keys(graphSvgs).length ||
+      Object.keys(tableHtml).length,
+  );
 
   let options = [];
   let correct_answer = '';
@@ -87,7 +122,7 @@ export function mapMathQuestion(src) {
   if (answer_format === 'mcq') {
     const choices = Array.isArray(src.choices) ? src.choices : [];
     if (choices.length < 2) return { skip: 'no_choices', extId };
-    options = choices.map((c) => ({ letter: c.id, text: tidy(c.body) }));
+    options = choices.map((c) => ({ letter: c.id, text: enrich(c.body) }));
     const correctLetter =
       (Array.isArray(src.correct_answer) ? src.correct_answer[0] : src.correct_answer) ||
       choices.find((c) => c.correct)?.id;
@@ -132,7 +167,7 @@ export function mapMathQuestion(src) {
       options,
       correct_answer,
       accepted_answers: accepted,
-      explanation: tidy(src.rationale) || null,
+      explanation: enrich(src.rationale) || null,
       has_visual,
       section: 'math',
       answer_format,
