@@ -35,3 +35,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local diagnostic scratch page (not committed)
+src/app/test/page.tsx

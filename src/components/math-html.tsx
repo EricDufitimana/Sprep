@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, type RefObject } from 'react';
+import { memo, useMemo, type RefObject } from 'react';
 import { cn } from '@/lib/utils';
 import { useTypesetMath } from '@/lib/mathjax';
 
@@ -26,7 +26,7 @@ import { useTypesetMath } from '@/lib/mathjax';
  * typesets it to SVG for rendering that's identical across every browser — see
  * `useTypesetMath` / `src/lib/mathjax.ts`.
  */
-export function MathHtml({
+function MathHtmlImpl({
   html,
   className,
   block = true,
@@ -51,6 +51,18 @@ export function MathHtml({
     <span ref={ref as RefObject<HTMLSpanElement>} {...shared} />
   );
 }
+
+/**
+ * Memoised so a re-render of the surrounding page with unchanged props doesn't
+ * reconcile this node. Critical on the exam page: its 1s/2-tick countdown
+ * re-renders the whole question view, and the answer choices (unlike the
+ * memoised stem) are re-created each render — that churn was resetting the
+ * choice's `dangerouslySetInnerHTML` back to raw LaTeX *after* MathJax had
+ * typeset it, so choices showed `\(\frac{…}{…}\)` while the stem rendered.
+ * With stable props (the choice's html string doesn't change), memo skips the
+ * re-render entirely, so MathJax's output survives.
+ */
+export const MathHtml = memo(MathHtmlImpl);
 
 /**
  * Strip the executable surface from a trusted-but-rich HTML fragment. Keeps all
