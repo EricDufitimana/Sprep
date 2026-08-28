@@ -44,15 +44,28 @@ Coordinates are DATA units (the axis numbers).
 
 coordinate plane:
 { "type":"coordinate", "xRange":[lo,hi], "yRange":[lo,hi],
-  "xLabel":"x", "yLabel":"y", "grid":true,
-  "series":[ ... ] }
-  series marks (any may add "color": "plot"|"accent"|"green"|"amber"|"muted"):
-    { "kind":"line", "slope":m, "intercept":b }
+  "xStep":n, "yStep":n,          // spacing of the LABELED numbers on each axis
+  "xGrid":n, "yGrid":n,          // spacing of the gridlines = the boxes (defaults to xStep/yStep)
+  "xLabel":"...", "yLabel":"...",// axis titles (drawn outside: y on the left, x centred below)
+  "title":"Line one\nLine two",  // title at the TOP; use \n for a second line
+  "grid":true, "series":[ ... ] }
+  series marks (any may add "color": "plot"|"accent"|"green"|"amber"|"muted"|"#hex"):
+    { "kind":"line", "slope":m, "intercept":b, "dash":true }
     { "kind":"line", "through":[[x1,y1],[x2,y2]] }
-    { "kind":"curve", "smooth":true, "points":[[x,y], ...] }   // see SAMPLING
-    { "kind":"scatter", "points":[[x,y], ...] }
-    { "kind":"segment", "from":[x,y], "to":[x,y] }
-    { "kind":"point", "at":[x,y], "label":"(x, y)", "open":false }  // open:true = hollow/excluded
+    { "kind":"curve", "smooth":false, "points":[[x,y], ...],  // smooth:false = straight segments; see SAMPLING for curves
+      "width":3, "marker":{"shape":"circle","color":"green","r":5} }  // dot/shape at every point
+    { "kind":"scatter", "points":[[x,y], ...], "shape":"circle" }
+    { "kind":"segment", "from":[x,y], "to":[x,y], "dash":[4,4] }
+    { "kind":"markers", "points":[ {"at":[x,y],"shape":"triangle","color":"green"} ] }  // shapes on certain points
+    { "kind":"point", "at":[x,y], "label":"(x, y)", "shape":"circle", "open":false }  // open:true = hollow
+  shapes: "circle"|"square"|"triangle"|"diamond".  dash: true or [on,off].
+
+  MATCH THE SOURCE GRAPH EXACTLY: reproduce the ranges, where the numbers sit
+  (xStep/yStep) AND how many boxes are between them (xGrid/yGrid), the title
+  (verbatim, with line breaks) and axis labels on the same sides, every plotted
+  point, any dots/markers drawn on the points (use "marker" or a "markers"
+  series with the right shape/colour), whether the line is straight segments
+  (smooth:false) or a smooth curve, and whether it is dashed.
 
 number line:
 { "type":"numberline", "range":[lo,hi], "step":1,

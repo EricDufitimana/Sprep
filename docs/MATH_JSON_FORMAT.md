@@ -93,38 +93,64 @@ Coordinates are in **data units** (your axis numbers), not pixels.
 ```jsonc
 {
   "type": "coordinate",
-  "xRange": [-6, 6], "yRange": [-6, 6],   // visible window
-  "xStep": 1, "yStep": 1,                 // optional tick spacing (auto if omitted)
-  "xLabel": "x", "yLabel": "y",           // optional
+  "xRange": [0, 50], "yRange": [0, 950],  // visible window
+  "xStep": 10, "yStep": 300,              // spacing of LABELED ticks (auto if omitted)
+  "xGrid": 5,  "yGrid": 100,              // spacing of gridlines = the "boxes" (defaults to xStep/yStep)
+  "xLabel": "Additive concentration (%)", // x-axis title
+  "yLabel": "Cycle life (cycles)",        // y-axis title
   "grid": true,                           // optional, default true
-  "title": "optional caption",
+  "title": "Mean Cycle Life of an LMA–PEO Cell,\nat Varying Additive Concentrations",
   "series": [ /* one or more of the marks below */ ]
 }
 ```
+
+**Matching a source graph exactly** — set the intervals to match the picture:
+
+- `xStep`/`yStep` are where the **numbers** appear on each axis.
+- `xGrid`/`yGrid` are the **gridline** spacing — i.e. how many boxes. If the source
+  labels every 10 but has 2 boxes between labels, use `"xStep": 10, "xGrid": 5`.
+- `title` is drawn at the **top**; use `\n` for a second line.
+- Axis titles sit **outside** by default (y rotated on the left, x centred below —
+  like most textbook graphs). Add `"axisLabels": "inline"` to tuck them next to
+  the axes instead.
 
 Series marks:
 
 ```jsonc
 // Straight line — by slope/intercept OR two points (extended across the window)
 { "kind": "line", "slope": 2, "intercept": 1 }
-{ "kind": "line", "through": [[0,1],[3,7]] }
+{ "kind": "line", "through": [[0,1],[3,7]], "dash": true }   // dash:true or [on,off]
 
-// Curve — YOU supply sampled points; set smooth:true for a smooth parabola/curve
-{ "kind": "curve", "smooth": true,
-  "points": [[-3,9],[-2,4],[-1,1],[0,0],[1,1],[2,4],[3,9]] }
+// Curve/polyline — YOU supply the points. smooth:true → smooth; smooth:false →
+// straight segments between points. "marker" puts a dot/shape at EVERY point.
+{ "kind": "curve", "smooth": false,
+  "points": [[0,0],[10,150],[20,300],[30,300],[40,520],[50,950]],
+  "color": "#8B0000", "width": 3,
+  "marker": { "shape": "circle", "color": "green", "r": 5 } }
 
-// Scatter — a cloud of dots
-{ "kind": "scatter", "points": [[1,2],[2,3],[4,5]] }
+// Scatter — dots (or a "shape") at points
+{ "kind": "scatter", "points": [[1,2],[2,3],[4,5]], "shape": "circle" }
 
 // Segment — from one point to another (not extended)
-{ "kind": "segment", "from": [0,0], "to": [3,4] }
+{ "kind": "segment", "from": [0,0], "to": [3,4], "dash": [4,4] }
+
+// Shaped markers on specific points ("dots/shapes on certain points")
+{ "kind": "markers", "points": [
+    { "at": [2,5], "shape": "triangle", "color": "green" },
+    { "at": [4,3], "shape": "diamond", "open": true, "label": "P" }
+] }
 
 // Single marked point — hollow with open:true (excluded endpoint)
-{ "kind": "point", "at": [2,5], "label": "(2, 5)", "open": false }
+{ "kind": "point", "at": [2,5], "label": "(2, 5)", "shape": "circle", "open": false }
 ```
 
-Any mark takes `"color"`: `"plot"` (blue, default), `"accent"` (pink),
-`"green"`, `"amber"`, `"muted"` (ink), or a raw CSS color like `"#0aa"`.
+- `"color"`: `"plot"` (blue, default), `"accent"` (pink), `"green"`, `"amber"`,
+  `"muted"` (ink), or a raw CSS color like `"#8B0000"`.
+- `"shape"` (markers/points/scatter): `"circle"` (default), `"square"`,
+  `"triangle"`, `"diamond"`. `"open": true` = hollow.
+- `"dash"` (any line-like mark): `true` for a standard dash, or `[on, off]` like
+  `[6,4]`.
+- `"width"`: line thickness (default 2).
 
 > **Curves have no equation evaluator** — the renderer only connects the points
 > you give it. Sample the function yourself (see the prompt in
