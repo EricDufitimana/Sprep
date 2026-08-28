@@ -1,5 +1,12 @@
 import type { QuestionDomain } from '@/utils/question-bank-parser';
 
+/** The four Reading & Writing domains — the subset these DSAT weights cover. */
+type RWDomain =
+  | 'information_and_ideas'
+  | 'craft_and_structure'
+  | 'expression_of_ideas'
+  | 'standard_english_conventions';
+
 /**
  * Official Digital SAT Reading & Writing domain distribution, from College
  * Board's assessment specifications. A full R&W section is 54 questions; a
@@ -11,7 +18,7 @@ import type { QuestionDomain } from '@/utils/question-bank-parser';
  *   Standard English Conventions   ~26%
  *   Expression of Ideas            ~20%
  */
-export const DSAT_DOMAIN_WEIGHTS: Record<QuestionDomain, number> = {
+export const DSAT_DOMAIN_WEIGHTS: Record<RWDomain, number> = {
   craft_and_structure: 0.28,
   information_and_ideas: 0.26,
   standard_english_conventions: 0.26,

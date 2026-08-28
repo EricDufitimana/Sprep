@@ -430,6 +430,13 @@ export const questionBanksManagementRouter = createTRPCRouter({
       // from what actually got parsed when the user didn't write their own.
       const description = input.description?.trim() || describeQuestions(parsed.questions) || null;
 
+      // A bank serves one section. Derive it from what parsed: any math question
+      // makes this a math bank (drives the taker's calculator, math rendering,
+      // and how sittings draw from the pool).
+      const bankSection = parsed.questions.some((q) => q.section === 'math')
+        ? 'math'
+        : 'reading_writing';
+
       const { data: bank, error: bankError } = await supabase
         .from('question_banks')
         .insert({
@@ -437,6 +444,7 @@ export const questionBanksManagementRouter = createTRPCRouter({
           description,
           source_file: input.sourcePath,
           total_questions: parsed.questions.length,
+          section: bankSection,
         })
         .select('id')
         .single();
@@ -459,9 +467,16 @@ export const questionBanksManagementRouter = createTRPCRouter({
         options: q.options,
         correct_answer: q.correct_answer,
         explanation: q.explanation,
-        has_visual: figureUrls.has(q.external_id),
+        // A figure is either a PDF-cropped PNG (figureUrls) or a math figure
+        // baked into the stem HTML (q.has_visual).
+        has_visual: figureUrls.has(q.external_id) || q.has_visual === true,
         visual_data: null,
         visual_url: figureUrls.get(q.external_id) ?? null,
+        // Math questions carry section/answer_format/accepted_answers; R&W
+        // questions leave these at the column defaults.
+        section: q.section ?? 'reading_writing',
+        answer_format: q.answer_format ?? 'mcq',
+        accepted_answers: q.accepted_answers ?? null,
         // The source document is the ground truth, so a clean parse is verified.
         extraction_status: 'verified' as const,
       }));

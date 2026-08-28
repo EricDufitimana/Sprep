@@ -21,8 +21,8 @@
 import { readFileSync } from 'node:fs';
 import { PrismaClient } from '@prisma/client';
 import { reconcile, buildAcceptedAnswers } from './lib/spr-answer-reconcile.mjs';
-import { renderGraphSvg, expandGraphMarkers } from './lib/graph-svg.mjs';
-import { renderTableHtml, expandTableMarkers } from './lib/table-html.mjs';
+import { renderGraphSvg, expandGraphMarkers } from '../src/lib/figures/graph-svg.mjs';
+import { renderTableHtml, expandTableMarkers } from '../src/lib/figures/table-html.mjs';
 
 /**
  * Build an id→rendered-HTML map for one source record from a single-spec field

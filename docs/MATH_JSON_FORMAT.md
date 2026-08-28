@@ -239,7 +239,20 @@ corner header and turn on `rowHeaders`:
 
 ---
 
-## 6. Ingesting
+## 6. Loading the questions
+
+Two ways, same JSON — both use the shared figure engines in `src/lib/figures/`:
+
+### In the app (easiest)
+
+Click **Create a test**, attach the `.json`, and it builds a bank you can then
+sit (timed, your choice of minutes) from the bank page — exactly like an English
+JSON. The importer auto-detects math records (`type`, `id`/`body` choices,
+`graph`/`table` specs) and stores them with `section = math`, so the calculator,
+LaTeX rendering, and grid-in grading all light up. English JSON still imports the
+same as before.
+
+### CLI (batch / scripted)
 
 ```bash
 node --experimental-strip-types --env-file=.env.local \

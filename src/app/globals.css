@@ -143,7 +143,7 @@
   display: block;
   margin: 0.75rem auto;
 }
-/* App-generated graphs (see scripts/lib/graph-svg.mjs). Axes/grid/labels draw
+/* App-generated graphs (see src/lib/figures/graph-svg.mjs). Axes/grid/labels draw
    in `currentColor`, so they follow the surrounding text color for free; the
    two vars below are the only baked colors and can be retimed here. Wrap them
    in a centered figure with a little breathing room. */
@@ -194,7 +194,7 @@
   font-weight: 600;
   background: var(--color-sunken, #f8fafc);
 }
-/* App-generated tables (see scripts/lib/table-html.mjs). Center the figure and
+/* App-generated tables (see src/lib/figures/table-html.mjs). Center the figure and
    let the table shrink to its content instead of filling the column; it still
    scrolls horizontally on its own if a row is too wide for a narrow screen. */
 .math-html .table-figure {

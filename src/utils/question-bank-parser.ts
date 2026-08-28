@@ -23,11 +23,23 @@
  * layout still imports. New formats are added by appending to `TEXT_PARSERS`.
  */
 
+// Figure engines (shared with the CLI ingest). Relative path — this module is
+// also loaded under plain Node by the seed script, where the `@/` alias is not
+// resolved. The `.mjs` engines are pure string builders with no dependencies.
+import { renderGraphSvg, expandGraphMarkers } from '../lib/figures/graph-svg.mjs';
+import { renderTableHtml, expandTableMarkers } from '../lib/figures/table-html.mjs';
+
 export type QuestionDomain =
+  // Reading & Writing
   | 'information_and_ideas'
   | 'craft_and_structure'
   | 'expression_of_ideas'
-  | 'standard_english_conventions';
+  | 'standard_english_conventions'
+  // Math
+  | 'algebra'
+  | 'advanced_math'
+  | 'problem_solving_data_analysis'
+  | 'geometry_trigonometry';
 
 export type QuestionDifficulty = 'easy' | 'medium' | 'hard';
 
@@ -42,11 +54,22 @@ export interface ParsedQuestion {
   passage: string | null;
   question_text: string;
   options: ParsedOption[];
-  correct_answer: 'A' | 'B' | 'C' | 'D';
+  /** MCQ: the correct letter. SPR (math grid-in): the first accepted answer. */
+  correct_answer: string;
   explanation: string | null;
   difficulty: QuestionDifficulty | null;
   domain: QuestionDomain | null;
   skill: string | null;
+  /**
+   * Math-only fields. Absent/undefined on Reading & Writing questions, whose
+   * import path is unchanged. See `parseJsonBank`'s math branch.
+   */
+  section?: 'reading_writing' | 'math';
+  answer_format?: 'mcq' | 'spr';
+  /** SPR accepted answers (numeric strings); null/undefined for MCQ. */
+  accepted_answers?: string[] | null;
+  /** True when the stem/choices carry a rendered figure (graph/table SVG/HTML). */
+  has_visual?: boolean;
 }
 
 export interface ParseResult {
@@ -928,6 +951,150 @@ function coerceJsonOptions(raw: unknown): ParsedOption[] {
   return [];
 }
 
+/* domain code → math question_domain enum (matches scripts/ingest-math-bank.mjs). */
+const MATH_DOMAIN_MAP: Record<string, QuestionDomain> = {
+  H: 'algebra',
+  P: 'advanced_math',
+  Q: 'problem_solving_data_analysis',
+  S: 'geometry_trigonometry',
+};
+const MATH_DIFFICULTY_MAP: Record<string, QuestionDifficulty> = {
+  E: 'easy',
+  M: 'medium',
+  H: 'hard',
+};
+
+/**
+ * Is this record in the structured *math* format (our LaTeX + graph/table spec
+ * shape) rather than the Reading & Writing shape? Signalled by an explicit
+ * `type` of mcq/spr, choices carrying `body` (vs R&W's `text`), a single-letter
+ * math `domain` code, or a `graph`/`table` spec. R&W records have none of these,
+ * so this never diverts an English question.
+ */
+function isMathRecord(raw: Record<string, unknown>): boolean {
+  if (raw.type === 'spr' || raw.type === 'mcq') return true;
+  if (raw.graph || raw.graphs || raw.table || raw.tables) return true;
+  if (typeof raw.domain === 'string' && raw.domain in MATH_DOMAIN_MAP) return true;
+  const choices = raw.choices;
+  if (Array.isArray(choices) && choices[0] && typeof choices[0] === 'object' && 'body' in choices[0]) {
+    return true;
+  }
+  return false;
+}
+
+/** Distinct, order-preserving accepted-answer list for an SPR question. */
+function acceptedAnswers(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw : raw == null ? [] : [raw];
+  const out: string[] = [];
+  for (const a of list) {
+    const s = String(a).trim();
+    // "either 7, 8, or 13" → its numbers; otherwise keep the token verbatim.
+    const either = /^either\s+(.+)$/i.exec(s);
+    const parts = either ? (either[1].match(/-?\d+(?:\.\d+)?(?:\/\d+)?/g) ?? [s]) : [s];
+    for (const v of parts) if (v && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+/**
+ * Map one structured *math* record → a ParsedQuestion (or a problem string).
+ * Math stems are rich HTML (LaTeX + baked graph/table SVG/HTML), so they are
+ * kept RAW — never run through the R&W text flattener — and rendered by
+ * <MathHtml>. Figure specs (`graph`/`graphs`/`table`/`tables`) are expanded into
+ * their `{{graph}}`/`{{table}}` markers here, exactly as the CLI ingest does.
+ */
+function mapMathJsonRecord(raw: Record<string, unknown>, n: number): ParsedQuestion | { problem: string } {
+  const domain = typeof raw.domain === 'string' ? MATH_DOMAIN_MAP[raw.domain] ?? null : null;
+  const diffCode = String(raw.difficulty ?? '');
+  const difficulty =
+    MATH_DIFFICULTY_MAP[diffCode] ??
+    (['easy', 'medium', 'hard'].includes(diffCode.toLowerCase())
+      ? (diffCode.toLowerCase() as QuestionDifficulty)
+      : null);
+
+  // Render any declarative figures, then expand their markers in each field.
+  let graphs: Record<string, string> = {};
+  let tables: Record<string, string> = {};
+  try {
+    if (raw.graph) graphs.graph = renderGraphSvg(raw.graph);
+    if (raw.graphs && typeof raw.graphs === 'object') {
+      for (const [id, spec] of Object.entries(raw.graphs as Record<string, unknown>)) {
+        graphs[id] = renderGraphSvg(spec);
+      }
+    }
+    if (raw.table) tables.table = renderTableHtml(raw.table);
+    if (raw.tables && typeof raw.tables === 'object') {
+      for (const [id, spec] of Object.entries(raw.tables as Record<string, unknown>)) {
+        tables[id] = renderTableHtml(spec);
+      }
+    }
+  } catch (e) {
+    return { problem: `Question ${n}: bad figure spec — ${e instanceof Error ? e.message : 'invalid'}` };
+  }
+  const enrich = (html: unknown): string =>
+    expandTableMarkers(expandGraphMarkers(String(html ?? '').trim(), graphs), tables);
+
+  const question_text = enrich(raw.stem ?? raw.question_text ?? raw.question);
+  if (!question_text) return { problem: `Question ${n}: missing stem` };
+
+  const hasVisual = Object.keys(graphs).length > 0 || Object.keys(tables).length > 0;
+  const format: 'mcq' | 'spr' = raw.type === 'spr' ? 'spr' : 'mcq';
+
+  if (format === 'spr') {
+    const accepted = acceptedAnswers(raw.correct_answer ?? raw.answer);
+    if (accepted.length === 0) return { problem: `Question ${n}: SPR question has no accepted answer` };
+    return {
+      external_id: String(raw.external_id ?? `m${n}`),
+      position: n,
+      passage: null,
+      question_text,
+      options: [],
+      correct_answer: accepted[0],
+      explanation: enrich(raw.rationale ?? raw.explanation) || null,
+      difficulty,
+      domain,
+      skill: raw.skill_desc ? String(raw.skill_desc).trim() : raw.skill ? String(raw.skill).trim() : null,
+      section: 'math',
+      answer_format: 'spr',
+      accepted_answers: accepted,
+      has_visual: hasVisual,
+    };
+  }
+
+  // MCQ: choices use {id, body}; keep bodies raw so LaTeX/figures survive.
+  const choices = Array.isArray(raw.choices) ? (raw.choices as Record<string, unknown>[]) : [];
+  if (choices.length < 2) return { problem: `Question ${n}: needs at least two choices` };
+  const options: ParsedOption[] = choices.map((c) => ({
+    letter: String(c.id ?? '').toUpperCase() as ParsedOption['letter'],
+    text: enrich(c.body),
+  }));
+  const correctLetter = String(
+    (Array.isArray(raw.correct_answer) ? raw.correct_answer[0] : raw.correct_answer) ??
+      choices.find((c) => c.correct === true)?.id ??
+      '',
+  ).toUpperCase();
+  if (!options.some((o) => o.letter === correctLetter && o.text)) {
+    return { problem: `Question ${n}: correct answer "${correctLetter}" has no matching choice` };
+  }
+
+  return {
+    external_id: String(raw.external_id ?? `m${n}`),
+    position: n,
+    passage: null,
+    question_text,
+    options,
+    correct_answer: correctLetter,
+    explanation: enrich(raw.rationale ?? raw.explanation) || null,
+    difficulty,
+    domain,
+    skill: raw.skill_desc ? String(raw.skill_desc).trim() : raw.skill ? String(raw.skill).trim() : null,
+    section: 'math',
+    answer_format: 'mcq',
+    accepted_answers: null,
+    has_visual: hasVisual,
+  };
+}
+
 export function parseJsonBank(text: string): ParseResult {
   let data: unknown;
   try {
@@ -945,6 +1112,16 @@ export function parseJsonBank(text: string): ParseResult {
 
   for (const raw of arr as Record<string, unknown>[]) {
     const n = questions.length + 1;
+
+    // Structured math format → its own mapper (raw HTML, SPR, figures). The R&W
+    // branch below is untouched, so English JSON imports exactly as before.
+    if (isMathRecord(raw)) {
+      const mapped = mapMathJsonRecord(raw, n);
+      if ('problem' in mapped) problems.push(mapped.problem);
+      else questions.push(mapped);
+      continue;
+    }
+
     const question_text = normalizeField(
       String(raw?.question_text ?? raw?.question ?? raw?.stem ?? ''),
     );

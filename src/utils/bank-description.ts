@@ -13,10 +13,16 @@
  */
 
 const DOMAIN_LABELS: Record<string, string> = {
+  // Reading & Writing
   information_and_ideas: 'Information & Ideas',
   craft_and_structure: 'Craft & Structure',
   expression_of_ideas: 'Expression of Ideas',
   standard_english_conventions: 'Standard English Conventions',
+  // Math
+  algebra: 'Algebra',
+  advanced_math: 'Advanced Math',
+  problem_solving_data_analysis: 'Problem-Solving & Data Analysis',
+  geometry_trigonometry: 'Geometry & Trigonometry',
 };
 
 export interface DescribableQuestion {
