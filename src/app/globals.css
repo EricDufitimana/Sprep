@@ -167,6 +167,15 @@
   margin: 0;
   vertical-align: middle;
 }
+/* Tailwind Preflight sets a blanket `svg { display: block }`. That turns
+   MathJax's inline-equation <svg> into a block, which snaps the sentence onto a
+   new line before and after every \(…\) (e.g. "capacitance" / "C" / ", in
+   microfarads" each on their own line). Force MathJax's own SVG back to
+   inline-block so inline math flows in the text; display equations keep their
+   own block/centered layout via the container rule below. */
+.math-html mjx-container > svg {
+  display: inline-block;
+}
 /* MathJax SVG output: keep a wide display equation inside its column instead of
    forcing the whole card to scroll. Inline math stays on the text baseline. */
 .math-html mjx-container[display='true'] {
