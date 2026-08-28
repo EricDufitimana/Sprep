@@ -20,7 +20,7 @@
  * points — the authoring prompt explains this), which keeps the renderer tiny
  * and the stored SVG stable forever.
  *
- * Supported `type`s: "coordinate", "numberline", "bar".
+ * Supported `type`s: "coordinate", "numberline", "bar", "boxplot".
  *
  * The coordinate plane carries the detail needed to reproduce a source graph: a
  * multi-line top `title`; separate label vs gridline spacing (`xStep`/`yStep` for
@@ -450,6 +450,94 @@ function renderBar(spec) {
   return svgWrap(width, height, parts.join(''), spec.title);
 }
 
+/* ------------------------------ box-and-whisker ------------------------------ */
+
+/**
+ * Box-and-whisker plot(s) from a five-number summary. Each plot draws a box from
+ * Q1→Q3 with a median line, whiskers to min/max with end caps, an optional label
+ * centred in the box, and its own numbered axis beneath it.
+ *
+ * Spec:
+ *   {
+ *     "type": "boxplot",
+ *     "range": [0, 40], "step": 4,        // default axis for plots that omit their own
+ *     "minorStep": 2,                     // optional minor ticks (default: step/2)
+ *     "plots": [
+ *       { "label":"A", "min":22, "q1":27, "median":30, "q3":46, "max":58,
+ *         "range":[20,60], "step":4, "color":"accent" },  // per-plot axis + colour
+ *       { "label":"B", "min":6, "q1":12, "median":33, "q3":37, "max":38, "range":[0,40] }
+ *     ]
+ *   }
+ * A single plot may be written inline (min/q1/… on the spec, no `plots`).
+ */
+function renderBoxplot(spec) {
+  const plots = Array.isArray(spec.plots) ? spec.plots : [spec];
+  const width = spec.width ?? 480;
+  const padL = 30;
+  const padR = 22;
+  const boxH = 34;
+  const axisGap = 12;
+  const bandH = boxH + axisGap + 30; // box + gap + axis (ticks/labels)
+  const height = spec.height ?? plots.length * bandH + 14;
+
+  const parts = [];
+  plots.forEach((p, i) => {
+    const [x0, x1] = p.range ?? spec.range ?? [0, 10];
+    const step = p.step ?? spec.step ?? niceStep(x1 - x0);
+    const minorStep = p.minorStep ?? spec.minorStep ?? step / 2;
+    const boxC = color(p.boxColor ?? p.color ?? spec.color ?? 'plot');
+    const whiskerC = color(p.whiskerColor ?? p.color ?? spec.color ?? 'plot');
+    const top = 10 + i * bandH;
+    const iw = width - padL - padR;
+    const px = (v) => padL + ((v - x0) / (x1 - x0)) * iw;
+    const midY = top + boxH / 2;
+    const q1 = px(p.q1);
+    const q3 = px(p.q3);
+    const med = px(p.median);
+    const mn = px(p.min);
+    const mx = px(p.max);
+
+    // Whiskers + end caps.
+    parts.push(
+      `<path d="M${n(mn)} ${n(midY)} L${n(q1)} ${n(midY)} M${n(q3)} ${n(midY)} L${n(mx)} ${n(midY)}" fill="none" stroke="${whiskerC}" stroke-width="2"/>` +
+        `<path d="M${n(mn)} ${n(top + 5)} L${n(mn)} ${n(top + boxH - 5)} M${n(mx)} ${n(top + 5)} L${n(mx)} ${n(top + boxH - 5)}" stroke="${whiskerC}" stroke-width="2"/>`,
+    );
+    // Box + median.
+    parts.push(
+      `<rect x="${n(q1)}" y="${n(top)}" width="${n(q3 - q1)}" height="${n(boxH)}" fill="var(--graph-bg, #fff)" stroke="${boxC}" stroke-width="2"/>` +
+        `<path d="M${n(med)} ${n(top)} L${n(med)} ${n(top + boxH)}" stroke="${boxC}" stroke-width="2"/>`,
+    );
+    // Label centred in the box.
+    if (p.label != null && p.label !== '') {
+      parts.push(
+        `<text x="${n((q1 + q3) / 2)}" y="${n(midY + 4)}" font-size="13" font-weight="700" text-anchor="middle" fill="currentColor">${esc(p.label)}</text>`,
+      );
+    }
+    // Axis with minor + major ticks and numbers.
+    const axisY = top + boxH + axisGap + 6;
+    parts.push(
+      `<path d="M${n(padL)} ${n(axisY)} L${n(width - padR)} ${n(axisY)}" stroke="currentColor" stroke-opacity="0.7" stroke-width="1.5"/>`,
+    );
+    const ticks = [];
+    if (minorStep > 0) {
+      for (let v = Math.ceil(x0 / minorStep) * minorStep; v <= x1 + 1e-9; v += minorStep) {
+        ticks.push(
+          `<path d="M${n(px(v))} ${n(axisY - 3)} L${n(px(v))} ${n(axisY + 3)}" stroke="currentColor" stroke-opacity="0.4"/>`,
+        );
+      }
+    }
+    for (let v = Math.ceil(x0 / step) * step; v <= x1 + 1e-9; v += step) {
+      ticks.push(
+        `<path d="M${n(px(v))} ${n(axisY - 5)} L${n(px(v))} ${n(axisY + 5)}" stroke="currentColor" stroke-opacity="0.7"/>` +
+          `<text x="${n(px(v))}" y="${n(axisY + 17)}" font-size="10" text-anchor="middle" fill="currentColor" fill-opacity="0.8">${esc(n(v))}</text>`,
+      );
+    }
+    parts.push(ticks.join(''));
+  });
+
+  return svgWrap(width, height, parts.join(''), spec.title);
+}
+
 /* ------------------------------ wrapper ------------------------------ */
 
 function svgWrap(width, height, inner, title) {
@@ -478,6 +566,8 @@ export function renderGraphSvg(spec) {
       return renderNumberLine(spec);
     case 'bar':
       return renderBar(spec);
+    case 'boxplot':
+      return renderBoxplot(spec);
     default:
       throw new Error(`unknown graph type: ${JSON.stringify(spec.type)}`);
   }

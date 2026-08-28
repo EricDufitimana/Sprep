@@ -184,6 +184,33 @@ solid = included.
 }
 ```
 
+### 3d. `type: "boxplot"` — box-and-whisker
+
+A five-number summary (min, Q1, median, Q3, max) drawn as a box with a median
+line and whiskers, over its own numbered axis. Give several `plots` to stack
+comparisons (like a labeled A and B); each plot can carry **its own axis range**,
+so two plots with different scales sit one above the other.
+
+```jsonc
+{
+  "type": "boxplot",
+  "range": [0, 40], "step": 4,      // default axis for plots that omit their own
+  "minorStep": 2,                   // optional small ticks between labels (default step/2)
+  "plots": [
+    { "label": "A", "min": 22, "q1": 27, "median": 30, "q3": 46, "max": 58,
+      "range": [20, 60], "step": 4, "color": "accent" },
+    { "label": "B", "min": 6, "q1": 12, "median": 33, "q3": 37, "max": 38,
+      "range": [0, 40], "boxColor": "muted", "whiskerColor": "green" }
+  ]
+}
+```
+
+- Each plot: `min`, `q1`, `median`, `q3`, `max` (required). Optional `label`
+  (shown in the box), `range`/`step` (its own axis), and `color` — or split
+  `boxColor` / `whiskerColor`.
+- A **single** box plot may be written inline (put `min`/`q1`/… on the spec, no
+  `plots` array).
+
 ---
 
 ## 4. Tables (the inbuilt table engine)

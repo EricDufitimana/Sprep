@@ -75,6 +75,18 @@ number line:
 bar chart:
 { "type":"bar", "categories":[...], "values":[...], "yLabel":"...", "yMax":n }
 
+box-and-whisker plot (five-number summary; give several "plots" to stack A/B/…):
+{ "type":"boxplot", "range":[lo,hi], "step":n, "minorStep":n,   // default axis
+  "plots":[
+    { "label":"A", "min":n, "q1":n, "median":n, "q3":n, "max":n,
+      "range":[lo,hi], "step":n, "color":"accent" }   // per-plot axis + colour (optional)
+  ] }
+  Read the five values off each plot: whisker ends = min & max, box ends = Q1 &
+  Q3, the line inside the box = median. If two plots use different axis scales,
+  give each its own "range"/"step" (they stack, each with its own numbered axis).
+  Colour a plot with "color", or split "boxColor"/"whiskerColor". A single plot
+  may omit "plots" and put min/q1/median/q3/max directly on the object.
+
 ## TABLES = a spec object, never hand-written HTML. Place with a marker:
 "{{table}}" for the single "table", or "{{table:ID}}" for an entry in "tables"
 (omit the marker for a single table and it is appended). Cells may contain LaTeX.
