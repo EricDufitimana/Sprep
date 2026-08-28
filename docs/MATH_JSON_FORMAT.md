@@ -264,3 +264,53 @@ node --experimental-strip-types --env-file=.env.local \
   batch first).
 - Add `--update` to overwrite existing rows with the same `external_id`.
 - Add `--batch <key>` to tag brand-new rows as a release cohort.
+
+---
+
+## 7. Graphs & tables in **Reading & Writing** JSON
+
+The same declarative figure specs (§3, §4) work in R&W question JSON — a data
+question describes its chart or table as JSON instead of shipping an image. The
+importer detects R&W vs Math by the record's shape (R&W uses `options: [{letter,
+text}]` and word domains like `"Information and Ideas"`); adding a `graph`/`table`
+never changes that.
+
+They render through the app's existing R&W surfaces, so placement differs
+slightly from Math:
+
+- **Graph** — add a `graph` spec (same fields as §3a). It renders as a clean
+  inline **SVG** in the question's figure slot (beside the passage), via the same
+  crisp path Math uses — **not** an image. You don't need a marker; a `{{graph}}`
+  marker in the text is ignored (the figure has its own slot). One graph per
+  question.
+- **Table** — add a `table`/`tables` spec (same fields as §4). Place it with a
+  `{{table}}` / `{{table:ID}}` marker in the `passage` or `question_text`; with no
+  marker a single `table` is appended to the passage. It renders as a real inline
+  `<table>`.
+
+Everything else about an R&W record is unchanged. Example:
+
+```json
+{
+  "external_id": "rw-data-07",
+  "domain": "Information and Ideas",
+  "difficulty": "medium",
+  "passage": "The researcher's results are shown.",
+  "question_text": "Which choice best describes the trend in the data?",
+  "graph": {
+    "type": "coordinate",
+    "xRange": [0, 10], "yRange": [0, 10], "xLabel": "week", "yLabel": "count",
+    "series": [{ "kind": "scatter", "points": [[1,2],[3,4],[5,6],[7,9]] }]
+  },
+  "options": [
+    { "letter": "A", "text": "It increases." },
+    { "letter": "B", "text": "It decreases." },
+    { "letter": "C", "text": "It stays flat." },
+    { "letter": "D", "text": "It has no pattern." }
+  ],
+  "correct_answer": "A",
+  "explanation": "The plotted points rise from left to right."
+}
+```
+
+Both import paths (in-app upload and CLI) handle R&W JSON figures the same way.

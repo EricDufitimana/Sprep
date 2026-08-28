@@ -70,6 +70,14 @@ export interface ParsedQuestion {
   accepted_answers?: string[] | null;
   /** True when the stem/choices carry a rendered figure (graph/table SVG/HTML). */
   has_visual?: boolean;
+  /**
+   * A Reading & Writing question's figure, as rendered inline HTML — for a `graph`
+   * spec this is the baked `<svg>`. <QuestionFigure> renders it through the same
+   * crisp path math uses (<MathHtml>), NOT as an image. (Math instead bakes its
+   * figures directly into the stem HTML, so it leaves this undefined. R&W tables
+   * are placed inline in the stem/passage text, which RichText already renders.)
+   */
+  visual_data?: string | null;
 }
 
 export interface ParseResult {
@@ -965,15 +973,16 @@ const MATH_DIFFICULTY_MAP: Record<string, QuestionDifficulty> = {
 };
 
 /**
- * Is this record in the structured *math* format (our LaTeX + graph/table spec
- * shape) rather than the Reading & Writing shape? Signalled by an explicit
- * `type` of mcq/spr, choices carrying `body` (vs R&W's `text`), a single-letter
- * math `domain` code, or a `graph`/`table` spec. R&W records have none of these,
- * so this never diverts an English question.
+ * Is this record in the structured *math* format (our LaTeX shape) rather than
+ * the Reading & Writing shape? Signalled by an explicit `type` of mcq/spr,
+ * choices carrying `body` (vs R&W's `text`), or a single-letter math `domain`
+ * code. NOTE: a `graph`/`table` spec is NOT a signal — both sections use the same
+ * figure engines (an R&W data question can carry a chart or table), so keying on
+ * them would mis-route English questions. R&W records have none of the signals
+ * below, so this never diverts an English question.
  */
 function isMathRecord(raw: Record<string, unknown>): boolean {
   if (raw.type === 'spr' || raw.type === 'mcq') return true;
-  if (raw.graph || raw.graphs || raw.table || raw.tables) return true;
   if (typeof raw.domain === 'string' && raw.domain in MATH_DOMAIN_MAP) return true;
   const choices = raw.choices;
   if (Array.isArray(choices) && choices[0] && typeof choices[0] === 'object' && 'body' in choices[0]) {
@@ -1095,6 +1104,57 @@ function mapMathJsonRecord(raw: Record<string, unknown>, n: number): ParsedQuest
   };
 }
 
+/**
+ * Render the declarative figures on a *Reading & Writing* record with the shared
+ * math engines. A `graph` spec becomes an inline `<svg>` shown beside the
+ * question (via <QuestionFigure> → <MathHtml>); `table` specs become bare
+ * `<table>` HTML placed inline in the stem/passage, which <RichText> renders.
+ * Returns a problem string if any spec is malformed.
+ */
+function buildRwFigures(
+  raw: Record<string, unknown>,
+  n: number,
+): { graphSvg: string | null; tables: Record<string, string> } | { problem: string } {
+  try {
+    // Wrap in .graph-figure (same as the math marker expansion) so the graph
+    // theming CSS vars apply and it centers consistently.
+    const wrap = (svg: string) => `<figure class="graph-figure">${svg}</figure>`;
+    const parts: string[] = [];
+    if (raw.graph) parts.push(wrap(renderGraphSvg(raw.graph)));
+    if (raw.graphs && typeof raw.graphs === 'object') {
+      for (const spec of Object.values(raw.graphs as Record<string, unknown>)) {
+        parts.push(wrap(renderGraphSvg(spec)));
+      }
+    }
+    const tables: Record<string, string> = {};
+    if (raw.table) tables.table = renderTableHtml(raw.table, { bare: true });
+    if (raw.tables && typeof raw.tables === 'object') {
+      for (const [id, spec] of Object.entries(raw.tables as Record<string, unknown>)) {
+        tables[id] = renderTableHtml(spec, { bare: true });
+      }
+    }
+    return { graphSvg: parts.length ? parts.join('') : null, tables };
+  } catch (e) {
+    return { problem: `Question ${n}: bad figure spec — ${e instanceof Error ? e.message : 'invalid'}` };
+  }
+}
+
+/** Replace `{{table}}`/`{{table:ID}}` markers in a fragment; records which ids it used. */
+function placeTables(text: string, tables: Record<string, string>, used: Set<string>): string {
+  if (!text) return text;
+  return text.replace(/\{\{table(?::([\w-]+))?\}\}/g, (_m, id) => {
+    const key = id || 'table';
+    if (!tables[key]) return '';
+    used.add(key);
+    return tables[key];
+  });
+}
+
+/** Drop any `{{graph}}`/`{{graph:ID}}` marker — R&W graphs render in the figure slot, not inline. */
+function stripGraphMarkers(text: string): string {
+  return text.replace(/\{\{graph(?::[\w-]+)?\}\}/g, '');
+}
+
 export function parseJsonBank(text: string): ParseResult {
   let data: unknown;
   try {
@@ -1122,10 +1182,33 @@ export function parseJsonBank(text: string): ParseResult {
       continue;
     }
 
-    const question_text = normalizeField(
-      String(raw?.question_text ?? raw?.question ?? raw?.stem ?? ''),
+    // Declarative figures (same engines as math): graph → inline SVG in the
+    // figure slot; tables → inline <table> in the stem/passage.
+    const fig =
+      raw?.graph || raw?.graphs || raw?.table || raw?.tables
+        ? buildRwFigures(raw, n)
+        : { graphSvg: null, tables: {} };
+    if ('problem' in fig) {
+      problems.push(fig.problem);
+      continue;
+    }
+    const usedTables = new Set<string>();
+    let stemHtml = stripGraphMarkers(
+      placeTables(String(raw?.question_text ?? raw?.question ?? raw?.stem ?? ''), fig.tables, usedTables),
     );
-    const passage = normalizeField(String(raw?.passage ?? raw?.stimulus ?? ''));
+    let passageHtml = stripGraphMarkers(
+      placeTables(String(raw?.passage ?? raw?.stimulus ?? ''), fig.tables, usedTables),
+    );
+    // A default table the author never placed with a marker goes into the
+    // stimulus if there is one, else onto the stem.
+    if (fig.tables.table && !usedTables.has('table')) {
+      if (passageHtml.trim()) passageHtml += '\n' + fig.tables.table;
+      else stemHtml += '\n' + fig.tables.table;
+      usedTables.add('table');
+    }
+
+    const question_text = normalizeField(stemHtml);
+    const passage = normalizeField(passageHtml);
     const options = coerceJsonOptions(raw?.options ?? raw?.choices);
     const correct = (String(raw?.correct_answer ?? raw?.answer ?? '')
       .toUpperCase()
@@ -1160,6 +1243,8 @@ export function parseJsonBank(text: string): ParseResult {
       difficulty: (['easy', 'medium', 'hard'].includes(diff) ? diff : null) as QuestionDifficulty | null,
       domain: raw?.domain ? normalizeDomain(String(raw.domain)) : null,
       skill: raw?.skill ? String(raw.skill).replace(/\s+/g, ' ').trim() : null,
+      has_visual: Boolean(fig.graphSvg) || usedTables.size > 0,
+      visual_data: fig.graphSvg,
     });
   }
 

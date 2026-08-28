@@ -467,10 +467,10 @@ export const questionBanksManagementRouter = createTRPCRouter({
         options: q.options,
         correct_answer: q.correct_answer,
         explanation: q.explanation,
-        // A figure is either a PDF-cropped PNG (figureUrls) or a math figure
-        // baked into the stem HTML (q.has_visual).
+        // A figure is either a PDF-cropped PNG (figureUrls), a math figure baked
+        // into the stem HTML, or an R&W graph rendered to inline SVG (visual_data).
         has_visual: figureUrls.has(q.external_id) || q.has_visual === true,
-        visual_data: null,
+        visual_data: q.visual_data ?? null,
         visual_url: figureUrls.get(q.external_id) ?? null,
         // Math questions carry section/answer_format/accepted_answers; R&W
         // questions leave these at the column defaults.

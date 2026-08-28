@@ -4,10 +4,16 @@ import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/ui/icon';
 import { RichText } from '@/components/rich-text';
+import { MathHtml } from '@/components/math-html';
 
 /** Flatten the inline formatting tags for use in a plain-string context (alt). */
 function plain(s: string): string {
   return s.replace(/<\/?(?:u|em|strong|sub|sup)>/gi, '');
+}
+
+/** A declarative R&W graph is baked to inline HTML (an <svg>/<figure>), not a URL. */
+function isRenderedFigure(s: string | null | undefined): boolean {
+  return !!s && /<(?:svg|figure|table)\b/i.test(s);
 }
 
 export interface QuestionFigureProps {
@@ -30,6 +36,16 @@ export function QuestionFigure({ url, description, className }: QuestionFigurePr
   const [failed, setFailed] = useState(false);
 
   if (!url && !description) return null;
+
+  // A declarative graph (baked to inline SVG) renders through the same crisp
+  // path math uses — real vector, theme-aware, not a rasterised <img>.
+  if (!url && isRenderedFigure(description)) {
+    return (
+      <figure className={cn('my-4', className)}>
+        <MathHtml html={description} />
+      </figure>
+    );
+  }
 
   if (url && !failed) {
     return (

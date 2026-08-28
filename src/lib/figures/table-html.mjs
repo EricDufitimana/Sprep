@@ -45,8 +45,16 @@ function alignAttr(align, i) {
  *   }
  *
  * Throws on a malformed spec so a bad table is caught at ingest, never shipped blank.
+ *
+ * @param {*} spec
+ * @param {{ bare?: boolean }} [opts]
+ * @param {boolean} [opts.bare]  Emit a plain `<table>` with the caption INSIDE it
+ *   (`<caption>`), and no `<figure>` wrapper. This is what the Reading & Writing
+ *   `<RichText>` renderer understands — its whitelist has `<table>`/`<caption>`
+ *   but not `<figure>`/`<figcaption>`. The math `<MathHtml>` path uses the default
+ *   (figure-wrapped) form.
  */
-export function renderTableHtml(spec) {
+export function renderTableHtml(spec, opts = {}) {
   if (!spec || typeof spec !== 'object') throw new Error('table spec must be an object');
   const rows = spec.rows;
   if (!Array.isArray(rows) || rows.length === 0) throw new Error('table spec needs a non-empty "rows" array');
@@ -74,6 +82,12 @@ export function renderTableHtml(spec) {
       })
       .join('') +
     '</tbody>';
+
+  // Bare form (RichText): caption goes inside the <table>; no <figure> wrapper.
+  if (opts.bare) {
+    const cap = spec.caption ? `<caption>${spec.caption}</caption>` : '';
+    return `<table>${cap}${thead}${tbody}</table>`;
+  }
 
   const caption = spec.caption
     ? `<figcaption class="table-caption">${spec.caption}</figcaption>`
