@@ -314,3 +314,17 @@ Everything else about an R&W record is unchanged. Example:
 ```
 
 Both import paths (in-app upload and CLI) handle R&W JSON figures the same way.
+
+### Inline scientific notation in R&W text
+
+R&W has no LaTeX renderer (it flows through `<RichText>`), but you can still write
+inline **subscripts/superscripts** with `$…$` — the importer converts them to the
+`<sub>`/`<sup>` tags R&W renders:
+
+- `$N_2O$` → N₂O, `$CO_2$` → CO₂, `$H_2O$` → H₂O
+- `$x^2$` → x², `$SO_4^{2-}$` → SO₄²⁻ (use braces for multi-character scripts)
+
+This is **currency-safe**: a `$…$` run is only treated as notation when it
+actually contains a `_` or `^`, so prose like "costs $5" or "$5 and $10" is left
+exactly as written. Full LaTeX (fractions, roots) isn't rendered in R&W — put that
+kind of question in the Math section.

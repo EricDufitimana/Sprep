@@ -58,6 +58,9 @@ export default function TestPage() {
   const [timeExpired, setTimeExpired] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
+  // Client-side bridge for the countdown anchor between `begin` succeeding and
+  // the refetched attempt carrying `resumedAt`. Null until the timer has begun.
+  const [beganAt, setBeganAt] = useState<string | null>(null);
   const [timerHidden, setTimerHidden] = useState(false);
   const [refOpen, setRefOpen] = useState(false);
   const [exiting, setExiting] = useState(false);
@@ -272,6 +275,16 @@ export default function TestPage() {
     }),
   );
 
+  // Begin: anchor the countdown the moment the questions are on screen, not when
+  // the attempt was created — so the fetch/navigation gap doesn't cost exam time.
+  // Idempotent server-side (only stamps a null resumed_at), so a refresh is safe.
+  const begin = useMutation(
+    trpc.tests.begin.mutationOptions({
+      onSuccess: (r) => setBeganAt(r.resumedAt),
+      onError: (e) => setError(e.message),
+    }),
+  );
+
   const doSubmit = useCallback(() => {
     if (submitted) return;
     setError(null);
@@ -295,14 +308,30 @@ export default function TestPage() {
   // the deadline is the *remaining* time counted from when the sitting last
   // resumed — a pause genuinely stops the clock, and a refresh resumes the same
   // countdown. Each tick derives from the wall clock, so a throttled tab can't
-  // drift. Legacy attempts fall back to started_at with 0 used.
+  // drift. `resumedAt` is null until `begin` fires (below): the countdown only
+  // starts once the questions are on screen, not when the attempt was created.
   const paused = attempt.data?.status === 'paused';
   const timeUsedSeconds = attempt.data?.timeUsedSeconds ?? 0;
-  const resumedAt = attempt.data?.resumedAt ?? attempt.data?.startedAt ?? null;
+  // Prefer the server value; `beganAt` bridges the gap until the refetch lands.
+  const resumedAt = attempt.data?.resumedAt ?? beganAt ?? null;
   const deadline = useMemo(() => {
     if (!isTimed || timerSeconds === null || !resumedAt) return null;
     return new Date(resumedAt).getTime() + Math.max(0, timerSeconds - timeUsedSeconds) * 1000;
   }, [isTimed, timerSeconds, resumedAt, timeUsedSeconds]);
+
+  // Start the countdown when the questions render — fire `begin` once, only for a
+  // running timed sitting whose clock hasn't been anchored yet. A paused sitting
+  // waits for the explicit Resume; a refresh mid-sitting already has a server
+  // `resumedAt`, so this stays idle and never rewinds the clock.
+  const beginFired = useRef(false);
+  useEffect(() => {
+    if (beginFired.current) return;
+    if (!isTimed || paused || submitted) return;
+    if (!attempt.data || attempt.data.resumedAt) return; // no data yet, or already begun
+    beginFired.current = true;
+    begin.mutate({ attemptId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTimed, paused, submitted, attempt.data, attemptId]);
 
   // Auto-submit must fire from inside the interval, but `doSubmit`'s identity
   // changes every render (it closes over the submit mutation). Holding it in a

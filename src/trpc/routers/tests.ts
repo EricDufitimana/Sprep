@@ -425,12 +425,14 @@ export const testsRouter = createTRPCRouter({
         timed: attempt.was_timed,
         timerSeconds: attempt.timer_seconds,
         startedAt: attempt.started_at,
-        // Pause/resume timing. `resumedAt` anchors the current running segment
-        // (falls back to started_at for legacy attempts); `timeUsedSeconds` is
-        // the active time already spent in earlier segments. Remaining time is
-        // (timerSeconds − timeUsedSeconds) counted down from resumedAt.
+        // Pause/resume timing. `resumedAt` anchors the current running segment and
+        // `timeUsedSeconds` is the active time already spent in earlier segments;
+        // remaining time is (timerSeconds − timeUsedSeconds) counted down from
+        // resumedAt. `resumedAt` is null until the client calls `begin` (the
+        // countdown starts when the questions are on screen, not at creation), so
+        // the page holds at full time and doesn't tick while it's null.
         status: attempt.status as 'in_progress' | 'paused',
-        resumedAt: attempt.resumed_at ?? attempt.started_at,
+        resumedAt: attempt.resumed_at,
         timeUsedSeconds: attempt.time_used_seconds ?? 0,
         questions,
       };
@@ -464,8 +466,10 @@ export const testsRouter = createTRPCRouter({
       }
       if (attempt.status === 'paused') return { success: true, alreadyPaused: true };
 
-      const anchor = new Date(attempt.resumed_at ?? attempt.started_at).getTime();
-      const segment = Math.max(0, Math.round((Date.now() - anchor) / 1000));
+      // No active segment until the countdown was begun (resumed_at stamped).
+      const segment = attempt.resumed_at
+        ? Math.max(0, Math.round((Date.now() - new Date(attempt.resumed_at).getTime()) / 1000))
+        : 0;
       let used = (attempt.time_used_seconds ?? 0) + segment;
       if (attempt.was_timed && attempt.timer_seconds) used = Math.min(used, attempt.timer_seconds);
 
@@ -522,6 +526,55 @@ export const testsRouter = createTRPCRouter({
         timerSeconds: attempt.timer_seconds,
         timed: attempt.was_timed,
       };
+    }),
+
+  /**
+   * Start the countdown when the sitting's questions are actually on screen.
+   *
+   * `start` creates the attempt but deliberately does NOT anchor the timer — the
+   * few seconds between creating it and the client rendering the questions (the
+   * fetch + navigation + first paint) shouldn't burn exam time. The test page
+   * calls this once the questions render; it stamps `resumed_at = now`, and the
+   * countdown is anchored there.
+   *
+   * Idempotent by design: it only stamps when `resumed_at` is still null, so a
+   * refresh or a second mount mid-sitting can never rewind the clock — those
+   * already have a `resumed_at` and just get it back unchanged.
+   */
+  begin: protectedProcedure
+    .input(z.object({ attemptId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { supabase, user } = ctx;
+
+      const { data: attempt, error } = await supabase
+        .from('test_attempts')
+        .select('id, user_id, status, resumed_at')
+        .eq('id', input.attemptId)
+        .single();
+
+      if (error || !attempt) throw new TRPCError({ code: 'NOT_FOUND', message: 'Attempt not found' });
+      if (attempt.user_id !== user.id) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'That attempt is not yours' });
+      }
+
+      // Already anchored (running or paused sitting being reopened) → return it
+      // unchanged so a refresh never rewinds the clock.
+      if (attempt.resumed_at) return { success: true, resumedAt: attempt.resumed_at };
+
+      const resumedAt = new Date().toISOString();
+      // Guard the write on resumed_at still being null, so two tabs racing the
+      // first mount can't both stamp — the second update matches no row.
+      const { error: updateError } = await supabase
+        .from('test_attempts')
+        .update({ resumed_at: resumedAt })
+        .eq('id', input.attemptId)
+        .is('resumed_at', null);
+
+      if (updateError) {
+        console.error('❌ [tests.begin] Failed to begin:', updateError);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Could not start the timer' });
+      }
+      return { success: true, resumedAt };
     }),
 
   submit: protectedProcedure
@@ -591,8 +644,8 @@ export const testsRouter = createTRPCRouter({
       // is still running (not paused), the active segment since `resumed_at`.
       // Capped at the timer for timed sittings.
       const activeSegment =
-        attempt.status === 'in_progress'
-          ? Math.max(0, Math.round((Date.now() - new Date(attempt.resumed_at ?? attempt.started_at).getTime()) / 1000))
+        attempt.status === 'in_progress' && attempt.resumed_at
+          ? Math.max(0, Math.round((Date.now() - new Date(attempt.resumed_at).getTime()) / 1000))
           : 0;
       let timeUsedSeconds = (attempt.time_used_seconds ?? 0) + activeSegment;
       if (attempt.was_timed && attempt.timer_seconds) {

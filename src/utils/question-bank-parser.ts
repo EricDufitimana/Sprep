@@ -1155,6 +1155,35 @@ function stripGraphMarkers(text: string): string {
   return text.replace(/\{\{graph(?::[\w-]+)?\}\}/g, '');
 }
 
+/**
+ * Reading & Writing has no LaTeX renderer — it flows through <RichText>, whose
+ * only math-ish markup is `<sub>`/`<sup>`. But AI-authored R&W text routinely
+ * writes inline scientific notation with dollar delimiters (`$N_2O$`, `$x^2$`,
+ * `$CO_2$`), which would otherwise show the literal dollar signs. Convert those
+ * `$…$` / `$$…$$` runs into the sub/superscript tags RichText already renders.
+ *
+ * Currency-safe: a `$…$` pair is only treated as math when its inner text
+ * actually contains a subscript/superscript (`_` or `^`). So "$5.00", "$5 and
+ * $10", and prose dollar amounts are left exactly as written — they carry no
+ * `_`/`^`, so they never match. (Full LaTeX like `\frac{…}{…}` isn't expressible
+ * as sub/sup and is rare in R&W; author it in the Math section instead.)
+ */
+function convertInlineScience(text: string): string {
+  if (!text || text.indexOf('$') === -1) return text;
+  // Braced forms first (multi-char: `_{10}`, `^{2-}`), then the single-character
+  // form LaTeX uses when unbraced (`_2` subscripts only the "2", so `N_2O` → N₂O).
+  const toScript = (inner: string): string =>
+    inner
+      .replace(/_\{([^}]*)\}/g, '<sub>$1</sub>')
+      .replace(/\^\{([^}]*)\}/g, '<sup>$1</sup>')
+      .replace(/_([A-Za-z0-9])/g, '<sub>$1</sub>')
+      .replace(/\^([A-Za-z0-9])/g, '<sup>$1</sup>');
+  const mathish = (s: string) => /[_^]/.test(s);
+  return text
+    .replace(/\$\$([^$\n]+)\$\$/g, (m, inner) => (mathish(inner) ? toScript(inner) : m))
+    .replace(/\$([^$\n]+)\$/g, (m, inner) => (mathish(inner) ? toScript(inner) : m));
+}
+
 export function parseJsonBank(text: string): ParseResult {
   let data: unknown;
   try {
@@ -1207,9 +1236,12 @@ export function parseJsonBank(text: string): ParseResult {
       usedTables.add('table');
     }
 
-    const question_text = normalizeField(stemHtml);
-    const passage = normalizeField(passageHtml);
-    const options = coerceJsonOptions(raw?.options ?? raw?.choices);
+    const question_text = convertInlineScience(normalizeField(stemHtml));
+    const passage = convertInlineScience(normalizeField(passageHtml));
+    const options = coerceJsonOptions(raw?.options ?? raw?.choices).map((o) => ({
+      ...o,
+      text: convertInlineScience(o.text),
+    }));
     const correct = (String(raw?.correct_answer ?? raw?.answer ?? '')
       .toUpperCase()
       .match(/[A-D]/) ?? [''])[0];
@@ -1239,7 +1271,7 @@ export function parseJsonBank(text: string): ParseResult {
       question_text,
       options,
       correct_answer: correct as ParsedOption['letter'],
-      explanation: normalizeField(String(raw?.explanation ?? raw?.rationale ?? '')) || null,
+      explanation: convertInlineScience(normalizeField(String(raw?.explanation ?? raw?.rationale ?? ''))) || null,
       difficulty: (['easy', 'medium', 'hard'].includes(diff) ? diff : null) as QuestionDifficulty | null,
       domain: raw?.domain ? normalizeDomain(String(raw.domain)) : null,
       skill: raw?.skill ? String(raw.skill).replace(/\s+/g, ' ').trim() : null,
