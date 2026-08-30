@@ -12,6 +12,7 @@ import { testsRouter } from './tests';
 import { vocabularyManagementRouter } from './vocabulary-management';
 import { vocabularyRouter } from './vocabulary';
 import { vocabularyTrainerRouter } from './vocabulary-trainer';
+import { collectionsRouter } from './collections';
 
 export const appRouter = createTRPCRouter({
   health: healthRouter,
@@ -27,6 +28,7 @@ export const appRouter = createTRPCRouter({
   progress: progressRouter,
   profile: profileRouter,
   check: checkRouter,
+  collections: collectionsRouter,
 });
 
 // export type definition of API

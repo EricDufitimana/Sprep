@@ -40,7 +40,9 @@ export type IconName =
   | 'spinner-solid'
   | 'warning'
   | 'calendar'
-  | 'reload';
+  | 'reload'
+  | 'bookmark'
+  | 'folder';
 
 export interface IconProps {
   name: IconName;

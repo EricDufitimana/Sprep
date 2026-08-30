@@ -64,6 +64,10 @@ export default function TestPage() {
   const [timerHidden, setTimerHidden] = useState(false);
   const [refOpen, setRefOpen] = useState(false);
   const [exiting, setExiting] = useState(false);
+  // Guards accidental submits: the Submit button opens this confirmation first,
+  // and only the dialog's Submit actually grades the sitting. (Timer auto-submit
+  // bypasses it — that path calls doSubmit directly.)
+  const [confirmingSubmit, setConfirmingSubmit] = useState(false);
   // Desmos panel — like Bluebook's math calculator. Its open/closed choice is
   // remembered per sitting so reopening the test brings the panel back as it was.
   const [calcOpen, setCalcOpen] = useState(false);
@@ -810,6 +814,48 @@ export default function TestPage() {
         </div>
       )}
 
+      {confirmingSubmit && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="submit-title"
+        >
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+            <h2 id="submit-title" className="dsat-text dsat-bold">
+              Submit this test?
+            </h2>
+            <p className="dsat-text mt-2">
+              You’ve answered {answeredCount} of {questions.length} question
+              {questions.length === 1 ? '' : 's'}
+              {answeredCount < questions.length
+                ? ` — ${questions.length - answeredCount} still unanswered.`
+                : '.'}{' '}
+              Once you submit, the sitting is scored and you can’t change your answers.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmingSubmit(false)}
+                disabled={submit.isPending}
+                className="rounded-full border border-[#1D2A5B] px-5 py-1.5 text-[13px] font-semibold text-[#1D2A5B] disabled:opacity-40"
+              >
+                Keep working
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmingSubmit(false);
+                  doSubmit();
+                }}
+                disabled={submit.isPending}
+                className="rounded-full bg-[#1D2A5B] px-5 py-1.5 text-[13px] font-semibold text-white disabled:opacity-40"
+              >
+                {submit.isPending ? 'Submitting…' : 'Submit'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Footer ──────────────────────────────────────────────── */}
       <footer
         className="grid shrink-0 grid-cols-3 items-center px-6 py-2.5"
@@ -838,7 +884,7 @@ export default function TestPage() {
           )}
           {reviewing || current === questions.length - 1 ? (
             <button
-              onClick={doSubmit}
+              onClick={() => setConfirmingSubmit(true)}
               disabled={submit.isPending}
               className="rounded-full bg-[#1D2A5B] px-5 py-1.5 text-[13px] font-semibold text-white disabled:opacity-40"
             >

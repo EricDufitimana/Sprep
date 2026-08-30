@@ -12,6 +12,7 @@ import { SatReferenceSheet } from '@/components/sat-reference-sheet';
 import { Icon } from '@/components/ui/icon';
 import { LoadingDots } from '@/components/ui/loading-dots';
 import { HighlightSwatches, useHighlighter, type HighlightTool } from '@/components/highlighter';
+import { BookmarkModal } from '@/components/bookmark-modal';
 
 /**
  * Shared untimed taker: one question at a time, per-question stopwatch, and an
@@ -55,15 +56,20 @@ export function UntimedTaker({
   questions,
   scopeLabel,
   onExit,
+  startIndex = 0,
 }: {
   questions: BuiltQuestion[];
   scopeLabel: string;
   onExit: () => void;
+  /** Which question to open on first render (a folder set can start at a pick). */
+  startIndex?: number;
 }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(() =>
+    Math.min(Math.max(0, startIndex), Math.max(0, questions.length - 1)),
+  );
   const [states, setStates] = useState<Record<string, QState>>({});
   const [navOpen, setNavOpen] = useState(false);
   const [finished, setFinished] = useState(false);
@@ -74,6 +80,7 @@ export function UntimedTaker({
   // Difficulty stays hidden until revealed from the "More" menu (like /tester).
   const [showDifficulty, setShowDifficulty] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [bookmarkOpen, setBookmarkOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   // Answer eliminator: toggled from the "More" menu. When on, each choice shows a
@@ -422,6 +429,18 @@ export function UntimedTaker({
                 role="menu"
                 className="absolute right-0 top-full z-10 mt-2 w-52 overflow-hidden rounded-xl border border-[#E7E0D2] bg-white py-1 shadow-[0_8px_24px_rgba(0,0,0,0.10)]"
               >
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setBookmarkOpen(true);
+                    setMenuOpen(false);
+                  }}
+                  className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[13px] text-[#23201B] hover:bg-[#FAF8F3]"
+                >
+                  <Icon name="bookmark" className="text-[13px] text-[#3B5BDB]" />
+                  Save to collection
+                </button>
+                <div className="my-1 border-t border-[#EFE9DC]" />
                 <button
                   role="menuitemcheckbox"
                   aria-checked={showDifficulty}
@@ -778,6 +797,9 @@ export function UntimedTaker({
 
       {/* SAT math reference sheet — opened from the header's "Reference". */}
       <SatReferenceSheet open={refOpen} onClose={() => setRefOpen(false)} />
+
+      {/* Bookmark the current question into a collection folder. */}
+      {q && <BookmarkModal open={bookmarkOpen} onClose={() => setBookmarkOpen(false)} questionId={q.id} />}
     </div>
   );
 }
