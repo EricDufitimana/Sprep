@@ -405,24 +405,40 @@ function renderNumberLine(spec) {
 
 function renderBar(spec) {
   const width = spec.width ?? 360;
-  const height = spec.height ?? 280;
-  const padL = 34;
-  const padR = 12;
-  const padT = 14;
-  const padB = 34;
   const cats = spec.categories ?? [];
   const vals = spec.values ?? [];
+  // Per-bar colours (spec.colors parallel to values), else one shared colour.
+  const barColor = (i) =>
+    color(Array.isArray(spec.colors) ? (spec.colors[i] ?? 'plot') : spec.color || 'plot');
   const yMax = spec.yMax ?? Math.max(1, ...vals) * 1.1;
+  const yStep = spec.yStep ?? niceStep(yMax);
+  const titleLines = toLines(spec.title);
+  // A legend identifies bars by colour (used when the source omits x-axis labels).
+  const legend = Boolean(spec.legend);
+
+  const padL = 40;
+  const padR = 12;
+  const padT = 10 + (titleLines.length ? titleLines.length * 16 + 6 : 0);
+  const padB = 22 + (legend ? 0 : 12) + (spec.xLabel ? 18 : 0) + (legend ? cats.length * 16 + 8 : 0);
+  const height = spec.height ?? 260 + padT + (legend ? cats.length * 16 : 0);
+
   const iw = width - padL - padR;
-  const ih = height - padT - padB;
+  const plotBottom = height - padB;
+  const ih = plotBottom - padT;
   const bandW = iw / Math.max(1, cats.length);
   const barW = bandW * 0.6;
   const py = (v) => padT + (1 - v / yMax) * ih;
-  const c = color(spec.color || 'plot');
 
   const parts = [];
-  // y grid + labels
-  const yStep = spec.yStep ?? niceStep(yMax);
+
+  // Title (multi-line, top).
+  titleLines.forEach((line, i) => {
+    parts.push(
+      `<text x="${n(width / 2)}" y="${n(15 + i * 16)}" font-size="12" font-weight="600" text-anchor="middle" fill="currentColor">${esc(line)}</text>`,
+    );
+  });
+
+  // y grid + labels.
   for (let v = 0; v <= yMax + 1e-9; v += yStep) {
     parts.push(
       `<path d="M${n(padL)} ${n(py(v))} L${n(width - padR)} ${n(py(v))}" stroke="currentColor" stroke-opacity="0.12"/>` +
@@ -433,21 +449,49 @@ function renderBar(spec) {
   parts.push(
     `<path d="M${n(padL)} ${n(py(0))} L${n(width - padR)} ${n(py(0))}" stroke="currentColor" stroke-opacity="0.55"/>`,
   );
-  // bars + category labels
+
+  // bars (+ category labels under each bar only when there's no legend)
   cats.forEach((cat, i) => {
     const v = vals[i] ?? 0;
     const x = padL + bandW * i + (bandW - barW) / 2;
     parts.push(
-      `<rect x="${n(x)}" y="${n(py(v))}" width="${n(barW)}" height="${n(py(0) - py(v))}" fill="${c}" rx="1"/>` +
-        `<text x="${n(x + barW / 2)}" y="${n(height - padB + 14)}" font-size="10" text-anchor="middle" fill="currentColor" fill-opacity="0.75">${esc(cat)}</text>`,
+      `<rect x="${n(x)}" y="${n(py(v))}" width="${n(barW)}" height="${n(py(0) - py(v))}" fill="${barColor(i)}" rx="1"/>`,
     );
+    if (!legend) {
+      parts.push(
+        `<text x="${n(x + barW / 2)}" y="${n(plotBottom + 14)}" font-size="10" text-anchor="middle" fill="currentColor" fill-opacity="0.75">${esc(cat)}</text>`,
+      );
+    }
   });
+
+  // y-axis label (rotated on the left).
   if (spec.yLabel) {
+    const ly = padT + ih / 2;
     parts.push(
-      `<text x="${n(padL - 6)}" y="${n(padT - 4)}" font-size="10" text-anchor="end" fill="currentColor" fill-opacity="0.75">${esc(spec.yLabel)}</text>`,
+      `<text x="12" y="${n(ly)}" font-size="10" text-anchor="middle" fill="currentColor" fill-opacity="0.8" transform="rotate(-90 12 ${n(ly)})">${esc(spec.yLabel)}</text>`,
     );
   }
-  return svgWrap(width, height, parts.join(''), spec.title);
+  // x-axis label (centred below).
+  if (spec.xLabel) {
+    parts.push(
+      `<text x="${n(padL + iw / 2)}" y="${n(plotBottom + (legend ? 16 : 28))}" font-size="10" text-anchor="middle" fill="currentColor" fill-opacity="0.8">${esc(spec.xLabel)}</text>`,
+    );
+  }
+
+  // Legend: a swatch + name per category, stacked under the x-axis label.
+  if (legend) {
+    const lx = padL;
+    let ly = plotBottom + (spec.xLabel ? 26 : 14);
+    cats.forEach((cat, i) => {
+      parts.push(
+        `<rect x="${n(lx)}" y="${n(ly - 8)}" width="10" height="10" fill="${barColor(i)}"/>` +
+          `<text x="${n(lx + 15)}" y="${n(ly + 1)}" font-size="10" fill="currentColor" fill-opacity="0.85">${esc(cat)}</text>`,
+      );
+      ly += 16;
+    });
+  }
+
+  return svgWrap(width, height, parts.join(''));
 }
 
 /* ------------------------------ box-and-whisker ------------------------------ */
