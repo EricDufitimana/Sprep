@@ -43,6 +43,9 @@ export function BookmarkModal({
   const [newName, setNewName] = useState('');
   const [newColor, setNewColor] = useState<FolderColor>('blue');
   const [creating, setCreating] = useState(false);
+  // Row key that was just added, so we can flash a subtle "Added" confirmation
+  // immediately on click (before the mutation round-trips and refreshes state).
+  const [flashKey, setFlashKey] = useState<string | null>(null);
 
   const folders = useQuery(trpc.collections.listFolders.queryOptions());
   const state = useQuery(trpc.collections.questionState.queryOptions({ questionId }));
@@ -71,9 +74,18 @@ export function BookmarkModal({
   const inFolder = (folderId: string | null) =>
     folderId === null ? Boolean(state.data?.unsorted) : (state.data?.folderIds ?? []).includes(folderId);
 
+  const rowKey = (folderId: string | null) => folderId ?? 'unsorted';
+
   const toggle = (folderId: string | null) => {
-    if (inFolder(folderId)) removeBookmark.mutate({ questionId, folderId });
-    else bookmark.mutate({ questionId, folderId });
+    if (inFolder(folderId)) {
+      removeBookmark.mutate({ questionId, folderId });
+    } else {
+      bookmark.mutate({ questionId, folderId });
+      // Subtle immediate confirmation, cleared shortly after.
+      const key = rowKey(folderId);
+      setFlashKey(key);
+      window.setTimeout(() => setFlashKey((cur) => (cur === key ? null : cur)), 1200);
+    }
   };
 
   const rows: { id: string | null; name: string; color: string; count?: number }[] = [
@@ -88,13 +100,18 @@ export function BookmarkModal({
           <p className="py-6 text-center text-small text-ink-400">Loading your folders…</p>
         ) : (
           rows.map((row) => {
-            const active = inFolder(row.id);
+            const justAdded = flashKey === rowKey(row.id);
+            // Show as checked optimistically the instant it's clicked.
+            const active = inFolder(row.id) || justAdded;
             const sw = FOLDER_SWATCH[row.color] ?? FOLDER_SWATCH.slate;
             return (
               <button
                 key={row.id ?? 'unsorted'}
                 onClick={() => toggle(row.id)}
-                className="flex w-full items-center gap-3 rounded-control px-2.5 py-2 text-left hover:bg-surface"
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-control px-2.5 py-2 text-left transition-colors duration-300',
+                  justAdded ? sw.soft : 'hover:bg-surface',
+                )}
               >
                 <span className={cn('flex h-7 w-7 items-center justify-center rounded-lg', sw.soft)}>
                   <Icon name={row.id === null ? 'bookmark' : 'folder'} className={cn('text-small', sw.text)} />
@@ -107,10 +124,16 @@ export function BookmarkModal({
                     </span>
                   )}
                 </span>
+                {justAdded && (
+                  <span className="text-micro font-medium text-blue duration-300 animate-in fade-in slide-in-from-right-1">
+                    Added
+                  </span>
+                )}
                 <span
                   className={cn(
-                    'flex h-5 w-5 items-center justify-center rounded-[6px] border',
+                    'flex h-5 w-5 items-center justify-center rounded-[6px] border transition-transform duration-200',
                     active ? 'border-blue bg-blue text-white' : 'border-line text-transparent',
+                    justAdded && 'scale-110',
                   )}
                 >
                   <Icon name="checkmark" className="text-[10px]" />

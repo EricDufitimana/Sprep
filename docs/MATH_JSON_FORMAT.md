@@ -153,9 +153,13 @@ Series marks:
 - `"width"`: line thickness (default 2).
 
 > **Curves have no equation evaluator** — the renderer only connects the points
-> you give it. Sample the function yourself (see the prompt in
-> [`MATH_JSON_PROMPT.md`](./MATH_JSON_PROMPT.md), which does this for you). For a
-> clean parabola, ~7–13 points across the window is plenty.
+> you give it, using **monotone cubic interpolation** (like d3's `curveMonotoneX`)
+> so a `smooth` curve passes through your points **without overshooting** — no
+> spurious bumps or wiggles between samples. Sample the function yourself (see the
+> prompt in [`MATH_JSON_PROMPT.md`](./MATH_JSON_PROMPT.md), which does this for
+> you); ~8–12 points across the window is plenty, and points must go left→right
+> (x strictly increasing). Include the key x-values — roots, the vertex/turning
+> points, and the endpoints — so the shape is faithful.
 
 ### 3b. `type: "numberline"`
 

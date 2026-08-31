@@ -76,14 +76,73 @@ function niceStep(span) {
 }
 
 /**
- * Smooth a polyline into a Catmull-Rom → cubic-Bézier path (used for curves).
- * Straight `L` segments are used when `smooth` is false.
+ * Monotone cubic (Fritsch–Carlson) interpolation through points whose x strictly
+ * increases — i.e. a function plot. Unlike Catmull-Rom, it never overshoots
+ * between samples, so a sampled polynomial reads as a clean smooth curve with no
+ * spurious bumps or wiggles. This is the same idea as d3's `curveMonotoneX`.
+ * `pts` are pixel coords [[x,y],…] with x increasing.
+ */
+function monotonePath(pts) {
+  const len = pts.length;
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  // Secant slope of each segment.
+  const dx = [];
+  const slope = [];
+  for (let i = 0; i < len - 1; i++) {
+    dx[i] = xs[i + 1] - xs[i];
+    slope[i] = dx[i] === 0 ? 0 : (ys[i + 1] - ys[i]) / dx[i];
+  }
+  // Tangent at each point. Interior tangents use the weighted harmonic mean of
+  // the two neighbouring secant slopes, and are forced to 0 at a local extremum
+  // (sign change) — that's what kills overshoot.
+  const t = new Array(len);
+  t[0] = slope[0];
+  t[len - 1] = slope[len - 2];
+  for (let i = 1; i < len - 1; i++) {
+    const s0 = slope[i - 1];
+    const s1 = slope[i];
+    if (s0 * s1 <= 0) {
+      t[i] = 0;
+    } else {
+      const w1 = 2 * dx[i] + dx[i - 1];
+      const w2 = dx[i] + 2 * dx[i - 1];
+      t[i] = (w1 + w2) / (w1 / s0 + w2 / s1);
+    }
+  }
+  let d = `M${n(xs[0])} ${n(ys[0])}`;
+  for (let i = 0; i < len - 1; i++) {
+    const h = dx[i] / 3;
+    const c1x = xs[i] + h;
+    const c1y = ys[i] + t[i] * h;
+    const c2x = xs[i + 1] - h;
+    const c2y = ys[i + 1] - t[i + 1] * h;
+    d += ` C${n(c1x)} ${n(c1y)} ${n(c2x)} ${n(c2y)} ${n(xs[i + 1])} ${n(ys[i + 1])}`;
+  }
+  return d;
+}
+
+/**
+ * Build a path through points. `smooth:false` (or < 3 points) → straight `L`
+ * segments. Otherwise a smooth curve: monotone cubic when x strictly increases
+ * (a function plot — no overshoot), falling back to Catmull-Rom for a
+ * non-function curve where x is not monotonic.
  */
 function pathFrom(pts, smooth) {
   if (pts.length === 0) return '';
   if (pts.length < 3 || !smooth) {
     return 'M' + pts.map(([x, y]) => `${n(x)} ${n(y)}`).join(' L');
   }
+  let xIncreasing = true;
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i][0] <= pts[i - 1][0]) {
+      xIncreasing = false;
+      break;
+    }
+  }
+  if (xIncreasing) return monotonePath(pts);
+
+  // Non-function curve → Catmull-Rom.
   let d = `M${n(pts[0][0])} ${n(pts[0][1])}`;
   for (let i = 0; i < pts.length - 1; i++) {
     const p0 = pts[i - 1] || pts[i];
