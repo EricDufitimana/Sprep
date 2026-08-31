@@ -43,12 +43,52 @@ export function BookmarkModal({
   const [newName, setNewName] = useState('');
   const [newColor, setNewColor] = useState<FolderColor>('blue');
   const [creating, setCreating] = useState(false);
-  // Row key that was just added, so we can flash a subtle "Added" confirmation
-  // immediately on click (before the mutation round-trips and refreshes state).
-  const [flashKey, setFlashKey] = useState<string | null>(null);
+  // Row key + direction just toggled, so we can flash a subtle confirmation
+  // ("Added" on save, a quick tint on remove) immediately on click.
+  const [flash, setFlash] = useState<{ key: string; mode: 'add' | 'remove' } | null>(null);
 
   const folders = useQuery(trpc.collections.listFolders.queryOptions());
   const state = useQuery(trpc.collections.questionState.queryOptions({ questionId }));
+
+  const stateKey = trpc.collections.questionState.queryOptions({ questionId }).queryKey;
+  const foldersKey = trpc.collections.listFolders.queryOptions().queryKey;
+
+  type StateData = { folderIds: string[]; unsorted: boolean; bookmarked: boolean };
+  type FoldersData = {
+    folders: { id: string; name: string; color: string; createdAt: string; count: number }[];
+    unsortedCount: number;
+    totalBookmarks: number;
+  };
+
+  /** Immediately reflect an add/remove in both caches so the check + counts update
+   *  with no wait on the network. onSettled reconciles with the server after. */
+  const applyOptimistic = (folderId: string | null, adding: boolean) => {
+    queryClient.setQueryData<StateData>(stateKey, (prev) => {
+      const base: StateData = prev ?? { folderIds: [], unsorted: false, bookmarked: false };
+      const folderIds =
+        folderId === null
+          ? base.folderIds
+          : adding
+            ? base.folderIds.includes(folderId)
+              ? base.folderIds
+              : [...base.folderIds, folderId]
+            : base.folderIds.filter((id) => id !== folderId);
+      const unsorted = folderId === null ? adding : base.unsorted;
+      return { folderIds, unsorted, bookmarked: folderIds.length > 0 || unsorted };
+    });
+    queryClient.setQueryData<FoldersData>(foldersKey, (prev) => {
+      if (!prev) return prev;
+      const delta = adding ? 1 : -1;
+      return {
+        ...prev,
+        unsortedCount: folderId === null ? Math.max(0, prev.unsortedCount + delta) : prev.unsortedCount,
+        totalBookmarks: Math.max(0, prev.totalBookmarks + delta),
+        folders: prev.folders.map((f) =>
+          f.id === folderId ? { ...f, count: Math.max(0, f.count + delta) } : f,
+        ),
+      };
+    });
+  };
 
   const refresh = async () => {
     await Promise.all([
@@ -57,8 +97,8 @@ export function BookmarkModal({
     ]);
   };
 
-  const bookmark = useMutation(trpc.collections.bookmark.mutationOptions({ onSuccess: refresh }));
-  const removeBookmark = useMutation(trpc.collections.removeBookmark.mutationOptions({ onSuccess: refresh }));
+  const bookmark = useMutation(trpc.collections.bookmark.mutationOptions({ onSettled: refresh }));
+  const removeBookmark = useMutation(trpc.collections.removeBookmark.mutationOptions({ onSettled: refresh }));
   const createFolder = useMutation(
     trpc.collections.createFolder.mutationOptions({
       onSuccess: async (folder) => {
@@ -77,15 +117,16 @@ export function BookmarkModal({
   const rowKey = (folderId: string | null) => folderId ?? 'unsorted';
 
   const toggle = (folderId: string | null) => {
-    if (inFolder(folderId)) {
-      removeBookmark.mutate({ questionId, folderId });
-    } else {
-      bookmark.mutate({ questionId, folderId });
-      // Subtle immediate confirmation, cleared shortly after.
-      const key = rowKey(folderId);
-      setFlashKey(key);
-      window.setTimeout(() => setFlashKey((cur) => (cur === key ? null : cur)), 1200);
-    }
+    const adding = !inFolder(folderId);
+    // Update caches first so the checkmark + counts change on this very frame.
+    applyOptimistic(folderId, adding);
+    if (adding) bookmark.mutate({ questionId, folderId });
+    else removeBookmark.mutate({ questionId, folderId });
+    // Subtle immediate confirmation, cleared shortly after.
+    const key = rowKey(folderId);
+    const mode = adding ? 'add' : 'remove';
+    setFlash({ key, mode });
+    window.setTimeout(() => setFlash((cur) => (cur?.key === key ? null : cur)), 1200);
   };
 
   const rows: { id: string | null; name: string; color: string; count?: number }[] = [
@@ -100,9 +141,10 @@ export function BookmarkModal({
           <p className="py-6 text-center text-small text-ink-400">Loading your folders…</p>
         ) : (
           rows.map((row) => {
-            const justAdded = flashKey === rowKey(row.id);
-            // Show as checked optimistically the instant it's clicked.
-            const active = inFolder(row.id) || justAdded;
+            const flashing = flash?.key === rowKey(row.id);
+            const justAdded = flashing && flash?.mode === 'add';
+            const justRemoved = flashing && flash?.mode === 'remove';
+            const active = inFolder(row.id);
             const sw = FOLDER_SWATCH[row.color] ?? FOLDER_SWATCH.slate;
             return (
               <button
@@ -129,11 +171,17 @@ export function BookmarkModal({
                     Added
                   </span>
                 )}
+                {justRemoved && (
+                  <span className="text-micro font-medium text-ink-400 duration-300 animate-in fade-in slide-in-from-right-1">
+                    Removed
+                  </span>
+                )}
                 <span
                   className={cn(
                     'flex h-5 w-5 items-center justify-center rounded-[6px] border transition-transform duration-200',
                     active ? 'border-blue bg-blue text-white' : 'border-line text-transparent',
                     justAdded && 'scale-110',
+                    justRemoved && 'scale-90',
                   )}
                 >
                   <Icon name="checkmark" className="text-[10px]" />
