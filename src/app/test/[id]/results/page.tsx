@@ -203,6 +203,7 @@ export default function ResultsPage() {
                     skill={q.skill}
                     flagged={q.flagged}
                     externalId={q.externalId}
+                    questionId={q.questionId}
                   />
                   <QuestionReview
                     question={{
@@ -255,6 +256,7 @@ export default function ResultsPage() {
                   skill={q.skill}
                   flagged={q.flagged}
                   externalId={q.externalId}
+                  questionId={q.questionId}
                 />
                 <QuestionReview
                   key={q.questionId}

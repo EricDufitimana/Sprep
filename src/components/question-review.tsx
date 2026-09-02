@@ -8,6 +8,7 @@ import { Icon } from '@/components/ui/icon';
 import { QuestionFigure } from '@/components/question-figure';
 import { RichText } from '@/components/rich-text';
 import { MathHtml } from '@/components/math-html';
+import { BookmarkModal } from '@/components/bookmark-modal';
 
 export interface ReviewQuestion {
   questionText: string;
@@ -171,7 +172,12 @@ function SprReview({ question, revealed }: { question: ReviewQuestion; revealed:
   );
 }
 
-/** Metadata row shared by the review surfaces. */
+/** Metadata row shared by the review surfaces.
+ *
+ *  Pass `questionId` on a review/analysis surface to get a "Save to collection"
+ *  button on the right, wired to the same {@link BookmarkModal} the taker uses —
+ *  so a question spotted while reviewing a sitting or set can be filed away then
+ *  and there. */
 export function QuestionMeta({
   correct,
   unanswered,
@@ -180,6 +186,7 @@ export function QuestionMeta({
   externalId,
   flagged,
   label,
+  questionId,
 }: {
   correct?: boolean;
   unanswered?: boolean;
@@ -188,21 +195,41 @@ export function QuestionMeta({
   externalId?: string | null;
   flagged?: boolean;
   label?: string;
+  /** When set, shows a bookmark button that files this question into a collection. */
+  questionId?: string | null;
 }) {
+  const [saveOpen, setSaveOpen] = useState(false);
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-2">
-      {label && <span className="text-small font-semibold text-ink-900 tabular-nums">{label}</span>}
-      {correct !== undefined && (
-        <Badge tone={correct ? 'green' : unanswered ? 'neutral' : 'miss'}>
-          {correct ? 'Correct' : unanswered ? 'Unanswered' : 'Missed'}
-        </Badge>
+    <>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        {label && <span className="text-small font-semibold text-ink-900 tabular-nums">{label}</span>}
+        {correct !== undefined && (
+          <Badge tone={correct ? 'green' : unanswered ? 'neutral' : 'miss'}>
+            {correct ? 'Correct' : unanswered ? 'Unanswered' : 'Missed'}
+          </Badge>
+        )}
+        {skill && <Badge tone="neutral">{skill}</Badge>}
+        {difficulty && <Badge tone="neutral">{difficulty}</Badge>}
+        {flagged && <Badge tone="amber">Flagged</Badge>}
+        {(externalId || questionId) && (
+          <div className="ml-auto flex items-center gap-2.5">
+            {externalId && <span className="font-mono text-micro text-ink-400">ID {externalId}</span>}
+            {questionId && (
+              <button
+                type="button"
+                onClick={() => setSaveOpen(true)}
+                className="flex items-center gap-1.5 rounded-pill border border-line px-2.5 py-1 text-micro font-medium text-ink-700 transition-colors hover:border-blue/40 hover:text-blue focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue"
+              >
+                <Icon name="bookmark" className="text-[11px] text-blue" />
+                Save
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      {questionId && (
+        <BookmarkModal open={saveOpen} onClose={() => setSaveOpen(false)} questionId={questionId} />
       )}
-      {skill && <Badge tone="neutral">{skill}</Badge>}
-      {difficulty && <Badge tone="neutral">{difficulty}</Badge>}
-      {flagged && <Badge tone="amber">Flagged</Badge>}
-      {externalId && (
-        <span className="ml-auto font-mono text-micro text-ink-400">ID {externalId}</span>
-      )}
-    </div>
+    </>
   );
 }

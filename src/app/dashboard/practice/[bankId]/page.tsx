@@ -285,6 +285,7 @@ export default function BankDetailPage() {
               skill={active.skill}
               difficulty={active.difficulty}
               externalId={active.externalId}
+              questionId={active.id}
             />
             <p className="mb-3 text-small text-ink-500 tabular-nums">
               Seen {active.seen}× · {active.correct} correct · {active.missed} missed
