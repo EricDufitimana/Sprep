@@ -20,7 +20,7 @@
  * points — the authoring prompt explains this), which keeps the renderer tiny
  * and the stored SVG stable forever.
  *
- * Supported `type`s: "coordinate", "numberline", "bar", "boxplot".
+ * Supported `type`s: "coordinate", "numberline", "bar", "boxplot", "geometry".
  *
  * The coordinate plane carries the detail needed to reproduce a source graph: a
  * multi-line top `title`; separate label vs gridline spacing (`xStep`/`yStep` for
@@ -641,6 +641,241 @@ function renderBoxplot(spec) {
   return svgWrap(width, height, parts.join(''), spec.title);
 }
 
+/* ------------------------------ geometry ------------------------------ */
+
+/**
+ * A plain geometry diagram — triangles and other polygons, segments, circles,
+ * labeled vertices, angle / right-angle marks, and congruence ticks. Unlike the
+ * coordinate plane there are no axes; coordinates are an arbitrary drawing space
+ * (y-up) that is auto-fit to the content with a UNIFORM scale, so shapes keep
+ * their true proportions (a right triangle stays a right triangle).
+ *
+ * Spec:
+ *   {
+ *     "type": "geometry",
+ *     "view": [x0, y0, x1, y1],   // optional; auto-fits to the elements if omitted
+ *     "elements": [
+ *       { "kind":"polygon", "points":[[0,0],[4,0],[0,3]], "fill":"plot", "stroke":"muted" },
+ *       { "kind":"segment", "from":[0,0], "to":[4,0], "dash":true },
+ *       { "kind":"circle", "center":[0,0], "r":2 },
+ *       { "kind":"point", "at":[0,0], "label":"A", "labelPos":"below-left" },
+ *       { "kind":"label", "at":[2,-0.3], "text":"5" },
+ *       { "kind":"angle", "at":[0,0], "from":[4,0], "to":[0,3], "label":"θ" },
+ *       { "kind":"rightangle", "at":[0,0], "from":[4,0], "to":[0,3] },
+ *       { "kind":"tick", "on":[[0,0],[4,0]], "count":2 }
+ *     ]
+ *   }
+ * Colors: `stroke` (default "muted" = ink), `fill` (default none; `fillOpacity`
+ * defaults 0.12). `dash` as elsewhere.
+ */
+function renderGeometry(spec) {
+  const width = spec.width ?? 340;
+  const height = spec.height ?? 300;
+  const pad = spec.pad ?? 30;
+  const els = Array.isArray(spec.elements) ? spec.elements : [];
+
+  // Collect every coordinate to auto-fit the view (unless one is given).
+  const coords = [];
+  for (const e of els) {
+    if (e.points) for (const p of e.points) coords.push(p);
+    if (e.from) coords.push(e.from);
+    if (e.to) coords.push(e.to);
+    if (e.at) coords.push(e.at);
+    if (e.on) for (const p of e.on) coords.push(p);
+    if (e.center) {
+      const r = e.r ?? 1;
+      coords.push([e.center[0] - r, e.center[1] - r], [e.center[0] + r, e.center[1] + r]);
+    }
+  }
+  let [x0, y0, x1, y1] = spec.view ?? [0, 0, 1, 1];
+  if (!spec.view && coords.length) {
+    x0 = Math.min(...coords.map((c) => c[0]));
+    x1 = Math.max(...coords.map((c) => c[0]));
+    y0 = Math.min(...coords.map((c) => c[1]));
+    y1 = Math.max(...coords.map((c) => c[1]));
+  }
+  const spanX = x1 - x0 || 1;
+  const spanY = y1 - y0 || 1;
+  // Uniform scale (keep proportions) + center the drawing in the box.
+  const scale = Math.min((width - 2 * pad) / spanX, (height - 2 * pad) / spanY);
+  const offX = (width - spanX * scale) / 2;
+  const offY = (height - spanY * scale) / 2;
+  const px = (x) => offX + (x - x0) * scale;
+  const py = (y) => offY + (y1 - y) * scale; // y-up
+
+  const parts = [];
+  for (const e of els) {
+    parts.push(renderGeoElement(e, { px, py }));
+  }
+  return svgWrap(width, height, parts.join(''), spec.title);
+}
+
+/** Place a short text label near a point, offset per `pos` (default above-right). */
+function geoLabel(cx, cy, text, pos) {
+  const off = 11;
+  const map = {
+    above: [0, -off, 'middle'],
+    below: [0, off + 3, 'middle'],
+    left: [-off, 3, 'end'],
+    right: [off, 3, 'start'],
+    'above-left': [-off, -off + 3, 'end'],
+    'above-right': [off, -off + 3, 'start'],
+    'below-left': [-off, off, 'end'],
+    'below-right': [off, off, 'start'],
+  };
+  const [dx, dy, anchor] = map[pos] || map['above-right'];
+  return `<text x="${n(cx + dx)}" y="${n(cy + dy)}" font-size="12" text-anchor="${anchor}" fill="currentColor">${esc(text)}</text>`;
+}
+
+/** Draw one geometry element. */
+function renderGeoElement(e, ctx) {
+  const { px, py } = ctx;
+  const stroke = color(e.stroke ?? 'muted');
+  const w = e.width ?? 1.75;
+  const dash = dashAttr(e);
+
+  if (e.kind === 'polygon') {
+    const pts = (e.points ?? []).map(([x, y]) => `${n(px(x))},${n(py(y))}`).join(' ');
+    const fill = e.fill ? color(e.fill) : 'none';
+    const fillOpacity = e.fill ? ` fill-opacity="${e.fillOpacity ?? 0.12}"` : '';
+    const Tag = e.close === false ? 'polyline' : 'polygon';
+    return `<${Tag} points="${pts}" fill="${fill}"${fillOpacity} stroke="${stroke}" stroke-width="${w}" stroke-linejoin="round"${dash}/>`;
+  }
+
+  if (e.kind === 'segment' || e.kind === 'line') {
+    const [ax, ay] = e.from;
+    const [bx, by] = e.to;
+    const pax = px(ax);
+    const pay = py(ay);
+    const pbx = px(bx);
+    const pby = py(by);
+    let out = `<path d="M${n(pax)} ${n(pay)} L${n(pbx)} ${n(pby)}" fill="none" stroke="${stroke}" stroke-width="${w}"${dash}/>`;
+    // `mark` draws parallel-arrow chevrons at the midpoint (1 = ›, 2 = ››) — the
+    // standard way a diagram flags two lines as parallel.
+    if (e.mark) {
+      const mx = (pax + pbx) / 2;
+      const my = (pay + pby) / 2;
+      let dx = pbx - pax;
+      let dy = pby - pay;
+      const m = Math.hypot(dx, dy) || 1;
+      dx /= m;
+      dy /= m;
+      const count = Math.max(1, Math.min(3, e.mark === true ? 1 : e.mark));
+      const sz = 4;
+      for (let i = 0; i < count; i++) {
+        const t = (i - (count - 1) / 2) * 5;
+        const cxp = mx + dx * t;
+        const cyp = my + dy * t;
+        // A ">" pointing along the segment: two strokes from the tip.
+        const tipx = cxp + dx * sz;
+        const tipy = cyp + dy * sz;
+        const b1x = cxp - dx * sz - dy * sz;
+        const b1y = cyp - dy * sz + dx * sz;
+        const b2x = cxp - dx * sz + dy * sz;
+        const b2y = cyp - dy * sz - dx * sz;
+        out += `<path d="M${n(b1x)} ${n(b1y)} L${n(tipx)} ${n(tipy)} L${n(b2x)} ${n(b2y)}" fill="none" stroke="${stroke}" stroke-width="1.25"/>`;
+      }
+    }
+    if (e.label) out += geoLabel((pax + pbx) / 2, (pay + pby) / 2, e.label, e.labelPos ?? 'above');
+    return out;
+  }
+
+  if (e.kind === 'circle') {
+    const [cx, cy] = e.center;
+    // radius in data units → pixels (uniform scale, so x-scale == y-scale).
+    const rpx = Math.abs(px(e.center[0] + (e.r ?? 1)) - px(cx));
+    const fill = e.fill ? color(e.fill) : 'none';
+    const fillOpacity = e.fill ? ` fill-opacity="${e.fillOpacity ?? 0.12}"` : '';
+    let out = `<circle cx="${n(px(cx))}" cy="${n(py(cy))}" r="${n(rpx)}" fill="${fill}"${fillOpacity} stroke="${stroke}" stroke-width="${w}"${dash}/>`;
+    if (e.center && e.dot) out += `<circle cx="${n(px(cx))}" cy="${n(py(cy))}" r="2.5" fill="${stroke}"/>`;
+    return out;
+  }
+
+  if (e.kind === 'point') {
+    const [x, y] = e.at;
+    const r = e.r ?? 3;
+    const dot = e.dot === false ? '' : `<circle cx="${n(px(x))}" cy="${n(py(y))}" r="${r}" fill="${stroke}"/>`;
+    const label = e.label ? geoLabel(px(x), py(y), e.label, e.labelPos) : '';
+    return dot + label;
+  }
+
+  if (e.kind === 'label') {
+    const [x, y] = e.at;
+    return `<text x="${n(px(x))}" y="${n(py(y))}" font-size="${e.size ?? 12}" text-anchor="middle" fill="currentColor">${esc(e.text ?? '')}</text>`;
+  }
+
+  if (e.kind === 'angle') {
+    // Arc between the rays V→A and V→B, drawn in pixel space (so the flip is handled).
+    const vx = px(e.at[0]);
+    const vy = py(e.at[1]);
+    const a1 = Math.atan2(py(e.from[1]) - vy, px(e.from[0]) - vx);
+    const a2 = Math.atan2(py(e.to[1]) - vy, px(e.to[0]) - vx);
+    let d = a2 - a1;
+    while (d <= -Math.PI) d += 2 * Math.PI;
+    while (d > Math.PI) d -= 2 * Math.PI; // signed minor angle
+    const r = e.r ?? 18;
+    const steps = 16;
+    let path = '';
+    for (let i = 0; i <= steps; i++) {
+      const a = a1 + (d * i) / steps;
+      const x = vx + r * Math.cos(a);
+      const y = vy + r * Math.sin(a);
+      path += (i === 0 ? 'M' : ' L') + `${n(x)} ${n(y)}`;
+    }
+    let out = `<path d="${path}" fill="none" stroke="${stroke}" stroke-width="1.25"/>`;
+    if (e.label) {
+      const am = a1 + d / 2;
+      out += `<text x="${n(vx + (r + 12) * Math.cos(am))}" y="${n(vy + (r + 12) * Math.sin(am) + 4)}" font-size="12" text-anchor="middle" fill="currentColor">${esc(e.label)}</text>`;
+    }
+    return out;
+  }
+
+  if (e.kind === 'rightangle') {
+    const vx = px(e.at[0]);
+    const vy = py(e.at[1]);
+    const u = (P) => {
+      const dx = px(P[0]) - vx;
+      const dy = py(P[1]) - vy;
+      const m = Math.hypot(dx, dy) || 1;
+      return [dx / m, dy / m];
+    };
+    const [u1x, u1y] = u(e.from);
+    const [u2x, u2y] = u(e.to);
+    const s = e.size ?? 12;
+    const p1 = [vx + u1x * s, vy + u1y * s];
+    const pc = [vx + (u1x + u2x) * s, vy + (u1y + u2y) * s];
+    const p2 = [vx + u2x * s, vy + u2y * s];
+    return `<path d="M${n(p1[0])} ${n(p1[1])} L${n(pc[0])} ${n(pc[1])} L${n(p2[0])} ${n(p2[1])}" fill="none" stroke="${stroke}" stroke-width="1.25"/>`;
+  }
+
+  if (e.kind === 'tick') {
+    // `count` congruence ticks across the midpoint of segment `on`.
+    const [[ax, ay], [bx, by]] = e.on;
+    const mx = (px(ax) + px(bx)) / 2;
+    const my = (py(ay) + py(by)) / 2;
+    let dx = px(bx) - px(ax);
+    let dy = py(by) - py(ay);
+    const m = Math.hypot(dx, dy) || 1;
+    dx /= m;
+    dy /= m;
+    const nx = -dy;
+    const ny = dx; // perpendicular
+    const count = Math.max(1, Math.min(3, e.count ?? 1));
+    const gap = 4;
+    const half = 5;
+    let out = '';
+    for (let i = 0; i < count; i++) {
+      const t = (i - (count - 1) / 2) * gap;
+      const cxp = mx + dx * t;
+      const cyp = my + dy * t;
+      out += `<path d="M${n(cxp - nx * half)} ${n(cyp - ny * half)} L${n(cxp + nx * half)} ${n(cyp + ny * half)}" stroke="${stroke}" stroke-width="1.5"/>`;
+    }
+    return out;
+  }
+
+  return '';
+}
+
 /* ------------------------------ wrapper ------------------------------ */
 
 function svgWrap(width, height, inner, title) {
@@ -671,6 +906,8 @@ export function renderGraphSvg(spec) {
       return renderBar(spec);
     case 'boxplot':
       return renderBoxplot(spec);
+    case 'geometry':
+      return renderGeometry(spec);
     default:
       throw new Error(`unknown graph type: ${JSON.stringify(spec.type)}`);
   }

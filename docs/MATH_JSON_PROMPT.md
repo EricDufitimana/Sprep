@@ -87,6 +87,20 @@ box-and-whisker plot (five-number summary; give several "plots" to stack A/B/…
   Colour a plot with "color", or split "boxColor"/"whiskerColor". A single plot
   may omit "plots" and put min/q1/median/q3/max directly on the object.
 
+geometry (triangles/circles/angle diagrams — no axes; uniform scale keeps shapes true):
+{ "type":"geometry", "view":[x0,y0,x1,y1],  // view optional; auto-fits if omitted
+  "elements":[
+    { "kind":"polygon", "points":[[x,y],...], "fill":"plot" },
+    { "kind":"segment", "from":[x,y], "to":[x,y], "dash":true, "mark":1, "label":"m" },  // mark = parallel arrows
+    { "kind":"circle", "center":[x,y], "r":n },
+    { "kind":"point", "at":[x,y], "label":"A", "labelPos":"below-left" },
+    { "kind":"label", "at":[x,y], "text":"5" },
+    { "kind":"angle", "at":[x,y], "from":[x,y], "to":[x,y], "label":"x°" },
+    { "kind":"rightangle", "at":[x,y], "from":[x,y], "to":[x,y] },
+    { "kind":"tick", "on":[[x,y],[x,y]], "count":2 } ] }
+  Parallel lines + transversal = two segments with the same "mark" plus a crossing
+  segment. A triangle split into more triangles = outer polygon + segment cevians.
+
 ## TABLES = a spec object, never hand-written HTML. Place with a marker:
 "{{table}}" for the single "table", or "{{table:ID}}" for an entry in "tables"
 (omit the marker for a single table and it is appended). Cells may contain LaTeX.

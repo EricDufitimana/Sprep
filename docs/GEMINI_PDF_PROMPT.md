@@ -118,12 +118,26 @@ Two-way / frequency table: give "headers" an empty first entry "" and set
 "rowHeaders":true. Wrap any comparison inside a cell in LaTeX, e.g. "\\(x < 5\\)",
 so a bare "<" is never read as a tag.
 
-===================== GEOMETRY DIAGRAMS (no engine yet) =====================
-There is no spec for triangles/circles/angle diagrams. If a question depends on
-such a diagram, describe the given information IN WORDS inside the stem using
-LaTeX (side lengths, angle measures, labels, "not drawn to scale" if stated) so
-the question is fully answerable from the text. Do not invent measurements that
-the figure doesn't give.
+===================== GEOMETRY DIAGRAMS ("geometry" graph) =====================
+For triangles/circles/angle diagrams, use a "graph" of type "geometry" — a plain
+drawing space (y-up) that auto-fits with a uniform scale (shapes keep their true
+proportions). NO axes.
+{ "type":"geometry", "view":[x0,y0,x1,y1],   // view optional; auto-fits if omitted
+  "elements":[
+    { "kind":"polygon", "points":[[x,y],...], "fill":"plot", "stroke":"muted" },   // triangle/quad; close:false = open
+    { "kind":"segment", "from":[x,y], "to":[x,y], "dash":true, "mark":1, "label":"m" },  // mark 1/2 = parallel arrows
+    { "kind":"circle", "center":[x,y], "r":n, "dot":true },
+    { "kind":"point", "at":[x,y], "label":"A", "labelPos":"below-left" },  // above|below|left|right|above-left|above-right|below-left|below-right
+    { "kind":"label", "at":[x,y], "text":"5" },                 // a side length / angle value / free text
+    { "kind":"angle", "at":[x,y], "from":[x,y], "to":[x,y], "label":"x°" },  // angle arc at a vertex
+    { "kind":"rightangle", "at":[x,y], "from":[x,y], "to":[x,y] },           // right-angle square
+    { "kind":"tick", "on":[[x,y],[x,y]], "count":2 } ] }        // congruence ticks on a side
+Reproduce the figure: place each vertex, draw the sides as a polygon, label the
+vertices and the given side lengths/angles, and add a rightangle mark where a
+right angle is shown. Parallel lines cut by a transversal = two segments with the
+SAME "mark" plus a crossing segment. A triangle split into more triangles = the
+outer polygon plus segment cevians. Use ONLY measurements the figure gives; add
+"not drawn to scale" to the stem if the source says so.
 
 ============================ ANSWERS ============================
 - If the PDF includes an answer key or worked solution, use it. Match each answer

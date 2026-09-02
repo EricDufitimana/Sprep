@@ -215,6 +215,43 @@ so two plots with different scales sit one above the other.
 - A **single** box plot may be written inline (put `min`/`q1`/… on the spec, no
   `plots` array).
 
+### 3e. `type: "geometry"` — shapes & diagrams
+
+For triangles and other figures that aren't graphs: polygons, segments, circles,
+labeled vertices, angle & right-angle marks, and congruence ticks. There are **no
+axes** — coordinates are a plain drawing space (y-up) that auto-fits with a
+**uniform scale**, so shapes keep their true proportions (a right triangle stays
+a right triangle). Give a `view: [x0,y0,x1,y1]` to fix the window, or omit it to
+auto-fit to the elements.
+
+```jsonc
+{
+  "type": "geometry",
+  "title": "optional",
+  "view": [-1, -1, 5, 4],     // optional; auto-fits if omitted
+  "elements": [
+    // polygon (triangle/quad/…): fill optional; close:false → open polyline
+    { "kind": "polygon", "points": [[0,0],[4,0],[0,3]], "fill": "plot", "fillOpacity": 0.1, "stroke": "muted" },
+    // segment/line: dash, a midpoint label, and parallel-arrow marks (mark: 1 or 2)
+    { "kind": "segment", "from": [0,5], "to": [9,5], "mark": 1, "label": "m", "labelPos": "above" },
+    { "kind": "circle", "center": [0,0], "r": 2, "dot": true },
+    { "kind": "point", "at": [0,0], "label": "A", "labelPos": "below-left" },  // labelPos: above|below|left|right|above-left|above-right|below-left|below-right
+    { "kind": "label", "at": [2,-0.3], "text": "5" },        // free text (a side length, angle value, …)
+    { "kind": "angle", "at": [0,0], "from": [4,0], "to": [0,3], "label": "θ" },   // angle arc at a vertex
+    { "kind": "rightangle", "at": [0,0], "from": [4,0], "to": [0,3] },            // right-angle square
+    { "kind": "tick", "on": [[0,0],[4,0]], "count": 2 }      // congruence ticks on a side (1–3)
+  ]
+}
+```
+
+- Default `stroke` is `"muted"` (ink); add `fill` (+ optional `fillOpacity`) to
+  shade a polygon/circle. `dash` works on polygons and segments.
+- **Parallel lines cut by a transversal:** two segments with `"mark": 1`
+  (matching arrows = parallel) plus a third crossing segment; label the angles
+  with `label` elements.
+- **A triangle containing more triangles:** draw the outer `polygon`, then add
+  `segment` cevians to interior points — everything composes and auto-fits.
+
 ---
 
 ## 4. Tables (the inbuilt table engine)
