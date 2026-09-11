@@ -8,6 +8,7 @@ import {
   answerValueSchema,
   extractionStatusSchema,
   questionDifficultySchema,
+  questionCategorySchema,
   questionDomainSchema,
   questionOptionsSchema,
   sectionSchema,
@@ -254,6 +255,8 @@ export const questionsRouter = createTRPCRouter({
           excludeActive: z.boolean().default(false),
           /** Release cohort to count: all | original pool | newly-released batch. */
           cohort: cohortSchema.optional(),
+          /** Which category to count: the College Board bank vs the pasted sets. */
+          category: questionCategorySchema.optional(),
         })
         .optional(),
     )
@@ -261,6 +264,7 @@ export const questionsRouter = createTRPCRouter({
       const { supabase } = ctx;
       const section = input?.section ?? 'reading_writing';
       const cohort = input?.cohort ?? 'all';
+      const category = input?.category ?? 'question_bank';
 
       // Paged: the visible verified pool exceeds PostgREST's 1000-row cap, so a
       // single select would silently truncate and undercount whole domains.
@@ -275,6 +279,9 @@ export const questionsRouter = createTRPCRouter({
         // Keep the Original pool and each New batch on separate switches.
         if (cohort === 'original') q = q.is('release_batch', null);
         else if (cohort === 'new') q = q.not('release_batch', 'is', null);
+        // Never mix the College Board bank with the pasted "Digital SAT 1600" sets.
+        if (category === 'digital_sat_1600') q = q.eq('category', 'digital_sat_1600');
+        else q = q.is('category', null);
         return q.range(from, to);
       };
 
@@ -369,6 +376,8 @@ export const questionsRouter = createTRPCRouter({
         excludeActive: z.boolean().default(false),
         /** Release cohort to draw from: all | original pool | newly-released batch. */
         cohort: cohortSchema.optional(),
+        /** Which category to draw from: the College Board bank vs the pasted sets. */
+        category: questionCategorySchema.optional(),
         /** 'random' shuffles the draw; 'in_order' keeps question position order. */
         order: z.enum(['random', 'in_order']).default('random'),
       }),
@@ -376,6 +385,7 @@ export const questionsRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const { supabase } = ctx;
       const cohort = input.cohort ?? 'all';
+      const category = input.category ?? 'question_bank';
 
       // Paged: an unscoped ("randomize everything") or large-domain pool can
       // exceed 1000 rows, and a truncated pool would bias the random draw.
@@ -393,6 +403,9 @@ export const questionsRouter = createTRPCRouter({
         // Same Original/New split as the counts, so a built set matches the tiles.
         if (cohort === 'original') q = q.is('release_batch', null);
         else if (cohort === 'new') q = q.not('release_batch', 'is', null);
+        // Same category split as the counts — never mix the two pools.
+        if (category === 'digital_sat_1600') q = q.eq('category', 'digital_sat_1600');
+        else q = q.is('category', null);
         return q.range(from, to);
       };
 

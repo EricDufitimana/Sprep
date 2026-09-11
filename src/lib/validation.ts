@@ -26,6 +26,18 @@ export const questionDomainSchema = z.enum([
 export const sectionSchema = z.enum(['reading_writing', 'math']);
 
 /**
+ * Which Question Bank category the browse flow is scoped to. These two pools are
+ * disjoint and never mixed:
+ *  - 'question_bank'    — the College Board bank (questions.category IS NULL).
+ *  - 'digital_sat_1600' — the user's pasted "Digital SAT 1600" practice sets
+ *                         (questions.category = 'digital_sat_1600').
+ * Defaults to the College Board bank so existing practice is unchanged.
+ */
+export const questionCategorySchema = z
+  .enum(['question_bank', 'digital_sat_1600'])
+  .default('question_bank');
+
+/**
  * A saved answer value. R&W and math MCQ are single letters; math SPR is a
  * short free-response string (a number/fraction). The letter constraint is not
  * a security boundary — grading is server-side — so this is deliberately loose.

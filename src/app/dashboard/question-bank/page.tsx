@@ -68,6 +68,7 @@ type Scope =
 
 const EXCLUDE_ACTIVE_KEY = 'qb:excludeActive';
 const COHORT_KEY = 'qb:cohort';
+const CATEGORY_KEY = 'qb:category';
 
 /** Which release cohort the browse view is scoped to. */
 type Cohort = 'all' | 'original' | 'new';
@@ -75,6 +76,18 @@ const COHORTS: { value: Cohort; label: string; hint: string }[] = [
   { value: 'original', label: 'Original', hint: 'The original question pool' },
   { value: 'new', label: 'New', hint: 'Latest Bluebook release' },
   { value: 'all', label: 'All', hint: 'Original + new, combined' },
+];
+
+/**
+ * Which question category the whole page is scoped to. These two pools are
+ * disjoint and deliberately never mixed:
+ *  - 'question_bank'    — the College Board Question Bank (the bulk ingests).
+ *  - 'digital_sat_1600' — "The Digital SAT 1600": the sets the user pasted in.
+ */
+type Category = 'question_bank' | 'digital_sat_1600';
+const CATEGORIES: { value: Category; label: string; hint: string }[] = [
+  { value: 'question_bank', label: 'Question Bank', hint: 'The College Board question bank' },
+  { value: 'digital_sat_1600', label: 'The Digital SAT 1600', hint: 'The practice sets you added' },
 ];
 
 export default function QuestionBankPage() {
@@ -117,22 +130,64 @@ export default function QuestionBankPage() {
     }
   };
 
+  // "Question Bank vs The Digital SAT 1600" — the outermost, page-wide scope.
+  // The College Board bank and the user's pasted practice sets are kept as two
+  // separate pools; this switch chooses which one the whole page draws from.
+  // Defaults to the College Board bank so existing practice is unchanged.
+  const [category, setCategoryState] = useState<Category>('question_bank');
+  useEffect(() => {
+    const saved = localStorage.getItem(CATEGORY_KEY);
+    if (saved === 'question_bank' || saved === 'digital_sat_1600') setCategoryState(saved);
+  }, []);
+  const setCategory = (v: Category) => {
+    setCategoryState(v);
+    try {
+      localStorage.setItem(CATEGORY_KEY, v);
+    } catch {
+      /* private mode / storage disabled — the switch still works for the session */
+    }
+  };
+
+  // The release cohort only means something for the College Board bank (the
+  // pasted sets carry no Bluebook release). In "The Digital SAT 1600" we hide
+  // the cohort switch and draw from the whole category regardless of the saved
+  // cohort, so switching categories never lands the user on an empty pool.
+  const effectiveCohort: Cohort = category === 'digital_sat_1600' ? 'all' : cohort;
+
   // Counts drive the drill-down and recompute whenever a filter flips; the
   // customize step layers difficulty/exclusion on top and reports the pool size.
-  const counts = useQuery(trpc.questions.domainCounts.queryOptions({ section, excludeActive, cohort }));
+  const counts = useQuery(
+    trpc.questions.domainCounts.queryOptions({ section, excludeActive, cohort: effectiveCohort, category }),
+  );
+
+  // Full totals per category (ignoring the other filters) — power the badges on
+  // the category switch so each pool advertises its size for this section.
+  const questionBankCount = useQuery(
+    trpc.questions.domainCounts.queryOptions({ section, cohort: 'all', category: 'question_bank' }),
+  );
+  const digitalSatCount = useQuery(
+    trpc.questions.domainCounts.queryOptions({ section, cohort: 'all', category: 'digital_sat_1600' }),
+  );
 
   // The same counts, but of only the questions the user hasn't done yet. Diffing
   // the two gives a subtle "how much is left in this category" indicator without
   // any new backend work — `excludeCompleted` reuses the exact set-builder logic,
   // so the number shown is what a fresh set would actually draw from.
   const remaining = useQuery(
-    trpc.questions.domainCounts.queryOptions({ section, excludeActive, cohort, excludeCompleted: true }),
+    trpc.questions.domainCounts.queryOptions({
+      section,
+      excludeActive,
+      cohort: effectiveCohort,
+      category,
+      excludeCompleted: true,
+    }),
   );
 
   // Size of the newly-released batch (independent of the current cohort), so the
-  // "New" switch can advertise how many questions it holds for this section.
+  // "New" switch can advertise how many questions it holds for this section. The
+  // release cohorts only exist within the College Board bank.
   const newCounts = useQuery(
-    trpc.questions.domainCounts.queryOptions({ section, excludeActive, cohort: 'new' }),
+    trpc.questions.domainCounts.queryOptions({ section, excludeActive, cohort: 'new', category: 'question_bank' }),
   );
 
   // `null` = still loading (unknown); a number = the not-yet-done count. A domain
@@ -199,11 +254,25 @@ export default function QuestionBankPage() {
         /* ── Level 1: domains ───────────────────────────────────────────── */
         <>
           <PageHeader
-            title="Question Bank"
-            description="Browse by domain and skill, then build a custom, untimed set — the answer on demand after each question."
+            title={category === 'digital_sat_1600' ? 'The Digital SAT 1600' : 'Question Bank'}
+            description={
+              category === 'digital_sat_1600'
+                ? 'The practice sets you added, kept separate from the College Board bank. Browse by domain and skill, then build a custom, untimed set.'
+                : 'Browse by domain and skill, then build a custom, untimed set — the answer on demand after each question.'
+            }
           />
 
-          <CohortSwitch value={cohort} onChange={setCohort} newCount={newCounts.data?.total ?? null} />
+          <CategorySwitch
+            value={category}
+            onChange={setCategory}
+            questionBankCount={questionBankCount.data?.total ?? null}
+            digitalSatCount={digitalSatCount.data?.total ?? null}
+          />
+
+          {/* Release cohorts only exist within the College Board bank. */}
+          {category === 'question_bank' && (
+            <CohortSwitch value={cohort} onChange={setCohort} newCount={newCounts.data?.total ?? null} />
+          )}
 
           <ExcludeActiveToggle value={excludeActive} onChange={setExcludeActive} />
 
@@ -418,7 +487,8 @@ export default function QuestionBankPage() {
         section={section}
         scopeLabel={customize ? scopeLabel(customize) : ''}
         excludeActive={excludeActive}
-        cohort={cohort}
+        cohort={effectiveCohort}
+        category={category}
         onClose={() => setCustomize(null)}
         onBuilt={(questions, label) => {
           setSession({ questions, label });
@@ -429,13 +499,85 @@ export default function QuestionBankPage() {
       <ExamModuleModal
         open={examOpen}
         section={section}
-        cohort={cohort}
+        cohort={effectiveCohort}
+        category={category}
         excludeActive={excludeActive}
         poolByDiff={poolByDiff}
         onClose={() => setExamOpen(false)}
         onStart={(attemptId) => router.push(`/test/${attemptId}`)}
       />
     </>
+  );
+}
+
+/* ── Category switch ─────────────────────────────────────────────────────── */
+
+/**
+ * The outermost, page-wide scope: the College Board "Question Bank" vs "The
+ * Digital SAT 1600" (the sets the user pasted in). The two pools are disjoint
+ * and never mixed — this switch chooses which one the entire page (counts,
+ * drill-down, custom sets, exam modules) draws from. Each segment advertises how
+ * many questions its pool holds for the current section. Persisted like the
+ * other page-wide switches; defaults to the College Board bank.
+ */
+function CategorySwitch({
+  value,
+  onChange,
+  questionBankCount,
+  digitalSatCount,
+}: {
+  value: Category;
+  onChange: (v: Category) => void;
+  questionBankCount: number | null;
+  digitalSatCount: number | null;
+}) {
+  const countFor = (c: Category) =>
+    c === 'question_bank' ? questionBankCount : digitalSatCount;
+  return (
+    <div className="mb-3">
+      <div
+        role="tablist"
+        aria-label="Question category"
+        className="inline-flex w-full gap-1 rounded-control border border-line bg-surface p-1"
+      >
+        {CATEGORIES.map((c) => {
+          const on = value === c.value;
+          const count = countFor(c.value);
+          return (
+            <button
+              key={c.value}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              title={c.hint}
+              onClick={() => onChange(c.value)}
+              className={cn(
+                'flex flex-1 items-center justify-center gap-1.5 rounded-[calc(theme(borderRadius.control)-2px)] px-4 py-2 text-small font-medium transition-colors',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue',
+                on ? 'bg-blue text-white shadow-sm' : 'text-ink-600 hover:text-ink-900',
+              )}
+            >
+              {c.label}
+              {count !== null && (
+                <span
+                  className={cn(
+                    'rounded-pill px-1.5 py-0.5 text-micro font-semibold tabular-nums',
+                    on ? 'bg-white/20 text-white' : 'bg-blue-tint text-blue',
+                  )}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-micro text-ink-500">
+        {value === 'digital_sat_1600'
+          ? 'Showing the practice sets you added — kept separate from the College Board question bank.'
+          : 'Showing the College Board question bank — your added practice sets are under “The Digital SAT 1600.”'}
+      </p>
+    </div>
   );
 }
 
@@ -614,6 +756,7 @@ function CustomizeModal({
   scopeLabel,
   excludeActive,
   cohort,
+  category,
   onClose,
   onBuilt,
 }: {
@@ -622,6 +765,7 @@ function CustomizeModal({
   scopeLabel: string;
   excludeActive: boolean;
   cohort: Cohort;
+  category: Category;
   onClose: () => void;
   onBuilt: (questions: BuiltQuestion[], label: string) => void;
 }) {
@@ -652,6 +796,7 @@ function CustomizeModal({
       excludeCompleted,
       excludeActive,
       cohort,
+      category,
       order,
     };
     if (scope.kind === 'all') build.mutate(base);
@@ -949,6 +1094,7 @@ function ExamModuleModal({
   open,
   section,
   cohort,
+  category,
   excludeActive,
   poolByDiff,
   onClose,
@@ -957,6 +1103,7 @@ function ExamModuleModal({
   open: boolean;
   section: Section;
   cohort: Cohort;
+  category: Category;
   excludeActive: boolean;
   poolByDiff: { easy: number; medium: number; hard: number; total: number };
   onClose: () => void;
@@ -986,6 +1133,7 @@ function ExamModuleModal({
         difficulty: difficulty === 'mixed' ? undefined : [difficulty],
         count,
         cohort,
+        category,
         excludeActive,
         excludeCompleted,
       },

@@ -605,6 +605,11 @@ model questions {
   /// = original pool. Drives the Question Bank's Original/New switch; the ingest
   /// stamps it only on newly-inserted rows, never reclassifying existing ones.
   release_batch     String?
+  /// Which Question Bank category the question belongs to. Null = the College
+  /// Board bank (bulk ingests); 'digital_sat_1600' = the user's pasted "Digital
+  /// SAT 1600" practice sets. Independent of release_batch; drives the category
+  /// switch so pasted sets aren't mixed into the College Board pool.
+  category          String?
   answers           answers[]
   attempt_questions attempt_questions[]
   question_banks    question_banks       @relation(fields: [bank_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -614,6 +619,7 @@ model questions {
   @@index([domain], map: "idx_questions_domain")
   @@index([skill], map: "idx_questions_skill")
   @@index([section, release_batch], map: "idx_questions_release_batch")
+  @@index([section, category], map: "idx_questions_category")
   @@schema("public")
 }
 

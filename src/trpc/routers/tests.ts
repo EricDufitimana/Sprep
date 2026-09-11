@@ -203,6 +203,8 @@ interface AdhocCriteria {
   difficulty?: ('easy' | 'medium' | 'hard')[];
   count: number;
   cohort: 'all' | 'original' | 'new';
+  /** 'question_bank' = the College Board bank; 'digital_sat_1600' = pasted sets. */
+  category: 'question_bank' | 'digital_sat_1600';
   excludeActive: boolean;
   excludeCompleted: boolean;
 }
@@ -237,6 +239,9 @@ async function selectForAdhoc(supabase: SupabaseClient, adhoc: AdhocCriteria): P
     if (adhoc.difficulty?.length) q = q.in('difficulty', adhoc.difficulty);
     if (adhoc.cohort === 'original') q = q.is('release_batch', null);
     else if (adhoc.cohort === 'new') q = q.not('release_batch', 'is', null);
+    // Keep the College Board bank and the pasted "Digital SAT 1600" sets apart.
+    if (adhoc.category === 'digital_sat_1600') q = q.eq('category', 'digital_sat_1600');
+    else q = q.is('category', null);
     return q.range(from, to);
   });
 
@@ -270,6 +275,7 @@ export const testsRouter = createTRPCRouter({
               difficulty: z.array(questionDifficultySchema).optional(),
               count: z.number().int().min(1).max(120),
               cohort: z.enum(['all', 'original', 'new']).default('all'),
+              category: z.enum(['question_bank', 'digital_sat_1600']).default('question_bank'),
               excludeActive: z.boolean().default(false),
               excludeCompleted: z.boolean().default(false),
             })

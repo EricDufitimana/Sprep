@@ -479,6 +479,10 @@ export const questionBanksManagementRouter = createTRPCRouter({
         accepted_answers: q.accepted_answers ?? null,
         // The source document is the ground truth, so a clean parse is verified.
         extraction_status: 'verified' as const,
+        // Everything uploaded through the app is a pasted practice set — file it
+        // under "The Digital SAT 1600" so it's never mixed into the College Board
+        // Question Bank (whose questions leave category NULL).
+        category: 'digital_sat_1600' as const,
       }));
 
       const { error: insertError } = await supabase.from('questions').insert(rows);
@@ -647,6 +651,9 @@ export const questionBanksManagementRouter = createTRPCRouter({
         has_visual: q.has_visual,
         visual_data: q.visual_data ?? null,
         extraction_status: q.extraction_status,
+        // Uploaded/extracted questions are pasted practice sets — file them under
+        // "The Digital SAT 1600", never the College Board bank (category NULL).
+        category: 'digital_sat_1600' as const,
       }));
 
       const { error } = await supabase.from('questions').insert(rows);
